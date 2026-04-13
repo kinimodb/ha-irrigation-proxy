@@ -1,4 +1,4 @@
-"""Switch entities for per-zone manual valve control."""
+"""Switch entities for per-zone manual control and program start/stop."""
 
 from __future__ import annotations
 
@@ -23,14 +23,81 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up zone switch entities from a config entry."""
+    """Set up switch entities from a config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities = [
+    entities: list[SwitchEntity] = [
+        ProgramSwitch(coordinator, entry),
+    ]
+    entities.extend(
         ZoneSwitch(coordinator, entry, valve_id)
         for valve_id in coordinator.zones
-    ]
+    )
     async_add_entities(entities)
+
+
+class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+    """Switch to start/stop the sequencer program."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.SWITCH
+    _attr_icon = "mdi:sprinkler-variant"
+    _attr_translation_key = "program"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_program"
+        self._attr_name = "Program"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name=self._entry.data.get(CONF_NAME, "Irrigation"),
+            manufacturer="Irrigation Proxy",
+            model="Virtual Irrigation Controller",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        if self.coordinator.data is None:
+            return False
+        seq = self.coordinator.data.get("sequencer", {})
+        return seq.get("state") == "running"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data is None:
+            return {}
+        seq = self.coordinator.data.get("sequencer", {})
+        return {
+            "current_zone": seq.get("current_zone"),
+            "total_zones": seq.get("total_zones", 0),
+            "current_zone_index": seq.get("current_zone_index", -1),
+            "remaining_zone_seconds": seq.get("remaining_zone_seconds"),
+        }
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Start the irrigation program."""
+        await self.coordinator.sequencer.start()
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Stop the irrigation program."""
+        await self.coordinator.sequencer.stop()
+        await self.coordinator.async_request_refresh()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop program when entity is removed."""
+        if self.is_on:
+            _LOGGER.info("Program switch removed while running – stopping program")
+            await self.coordinator.sequencer.stop()
+        await super().async_will_remove_from_hass()
 
 
 class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):

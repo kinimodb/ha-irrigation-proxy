@@ -131,6 +131,11 @@ if not _HA_AVAILABLE:
     ha_switch.SwitchEntity = type("SwitchEntity", (), {})  # type: ignore[attr-defined]
     ha_switch.SwitchDeviceClass = MagicMock  # type: ignore[attr-defined]
 
+    # --- homeassistant.components.sensor ---
+    ha_sensor = _make_module("homeassistant.components.sensor")
+    ha_sensor.SensorEntity = type("SensorEntity", (), {})  # type: ignore[attr-defined]
+    ha_sensor.SensorDeviceClass = MagicMock  # type: ignore[attr-defined]
+
     # --- homeassistant.data_entry_flow ---
     ha_data_flow = _make_module("homeassistant.data_entry_flow")
 
