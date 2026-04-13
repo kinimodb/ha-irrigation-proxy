@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Irrigation Proxy",
+        "description": "Gib einen Namen für dieses Bewässerungsprogramm ein.",
+        "data": {
+          "name": "Programmname"
+        }
+      },
+      "zones": {
+        "title": "Zonen-Konfiguration",
+        "description": "Wähle die Ventil-Entities aus und setze eine Standard-Laufzeit.",
+        "data": {
+          "zones": "Ventil-Entities",
+          "duration_minutes": "Standard-Laufzeit pro Zone (Minuten)"
+        },
+        "data_description": {
+          "zones": "Wähle eine oder mehrere Switch-Entities die Bewässerungsventile steuern.",
+          "duration_minutes": "Standard-Laufzeit pro Zone in Minuten."
+        }
+      },
+      "safety": {
+        "title": "Sicherheits-Einstellungen",
+        "description": "Konfiguriere Sicherheitslimits für den Ventilbetrieb.",
+        "data": {
+          "max_runtime_minutes": "Maximale Laufzeit (Minuten)"
+        },
+        "data_description": {
+          "max_runtime_minutes": "Maximale Zeit die ein Ventil offen bleiben darf bevor der Deadman-Timer es zwangsweise schließt."
+        }
+      }
+    },
+    "error": {
+      "no_zones_selected": "Bitte wähle mindestens ein Ventil-Entity aus."
+    },
+    "abort": {
+      "already_configured": "Ein Bewässerungsprogramm mit diesem Namen existiert bereits."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Irrigation Proxy Optionen",
+        "description": "Zonen-Auswahl und Sicherheits-Einstellungen ändern.",
+        "data": {
+          "zones": "Ventil-Entities",
+          "duration_minutes": "Standard-Laufzeit pro Zone (Minuten)",
+          "max_runtime_minutes": "Maximale Laufzeit (Minuten)"
+        }
+      }
+    }
+  }
+}
