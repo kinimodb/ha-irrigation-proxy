@@ -1,0 +1,11 @@
+start_program:
+  name: Start Irrigation Program
+  description: >-
+    Start the configured irrigation program. Runs all zones sequentially
+    with their configured durations. No-op if already running.
+
+stop_program:
+  name: Stop Irrigation Program
+  description: >-
+    Stop the running irrigation program immediately. Closes the active
+    valve and cancels all remaining zones.

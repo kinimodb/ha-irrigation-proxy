@@ -21,13 +21,15 @@
         }
       },
       "safety": {
-        "title": "Sicherheits-Einstellungen",
-        "description": "Konfiguriere Sicherheitslimits für den Ventilbetrieb.",
+        "title": "Sicherheit & Wetter",
+        "description": "Sicherheitslimits und wetterbasierte Bewässerungsanpassung konfigurieren.",
         "data": {
-          "max_runtime_minutes": "Maximale Laufzeit (Minuten)"
+          "max_runtime_minutes": "Maximale Laufzeit (Minuten)",
+          "rain_threshold_mm": "Regen-Schwellwert (mm)"
         },
         "data_description": {
-          "max_runtime_minutes": "Maximale Zeit die ein Ventil offen bleiben darf bevor der Deadman-Timer es zwangsweise schließt."
+          "max_runtime_minutes": "Maximale Zeit die ein Ventil offen bleiben darf bevor der Deadman-Timer es zwangsweise schließt.",
+          "rain_threshold_mm": "Kombinierter Niederschlag (kürzlich + Vorhersage) in mm, ab dem die Bewässerung übersprungen wird."
         }
       }
     },
@@ -42,11 +44,12 @@
     "step": {
       "init": {
         "title": "Irrigation Proxy Optionen",
-        "description": "Zonen-Auswahl und Sicherheits-Einstellungen ändern.",
+        "description": "Zonen-Auswahl, Sicherheit und Wetter-Einstellungen ändern.",
         "data": {
           "zones": "Ventil-Entities",
           "duration_minutes": "Standard-Laufzeit pro Zone (Minuten)",
-          "max_runtime_minutes": "Maximale Laufzeit (Minuten)"
+          "max_runtime_minutes": "Maximale Laufzeit (Minuten)",
+          "rain_threshold_mm": "Regen-Schwellwert (mm)"
         }
       }
     }
@@ -70,7 +73,28 @@
       },
       "zone_time_remaining": {
         "name": "Verbleibende Zonenzeit"
+      },
+      "evapotranspiration": {
+        "name": "Evapotranspiration"
+      },
+      "water_need_factor": {
+        "name": "Wasserbedarf-Faktor"
       }
+    },
+    "binary_sensor": {
+      "rain_skip": {
+        "name": "Regen-Pause"
+      }
+    }
+  },
+  "services": {
+    "start_program": {
+      "name": "Bewässerungsprogramm starten",
+      "description": "Startet das konfigurierte Bewässerungsprogramm. Alle Zonen werden nacheinander bewässert."
+    },
+    "stop_program": {
+      "name": "Bewässerungsprogramm stoppen",
+      "description": "Stoppt das laufende Bewässerungsprogramm und schließt alle Ventile."
     }
   }
 }

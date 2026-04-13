@@ -65,6 +65,7 @@ if not _HA_AVAILABLE:
     ha_core = _make_module("homeassistant.core")
     ha_core.HomeAssistant = MagicMock  # type: ignore[attr-defined]
     ha_core.Event = MagicMock  # type: ignore[attr-defined]
+    ha_core.ServiceCall = MagicMock  # type: ignore[attr-defined]
     ha_core.callback = lambda f: f  # type: ignore[attr-defined]
 
     # --- homeassistant.config_entries ---
@@ -135,6 +136,15 @@ if not _HA_AVAILABLE:
     ha_sensor = _make_module("homeassistant.components.sensor")
     ha_sensor.SensorEntity = type("SensorEntity", (), {})  # type: ignore[attr-defined]
     ha_sensor.SensorDeviceClass = MagicMock  # type: ignore[attr-defined]
+
+    # --- homeassistant.components.binary_sensor ---
+    ha_binary_sensor = _make_module("homeassistant.components.binary_sensor")
+    ha_binary_sensor.BinarySensorEntity = type("BinarySensorEntity", (), {})  # type: ignore[attr-defined]
+    ha_binary_sensor.BinarySensorDeviceClass = MagicMock  # type: ignore[attr-defined]
+
+    # --- homeassistant.helpers.aiohttp_client ---
+    ha_aiohttp = _make_module("homeassistant.helpers.aiohttp_client")
+    ha_aiohttp.async_get_clientsession = MagicMock  # type: ignore[attr-defined]
 
     # --- homeassistant.data_entry_flow ---
     ha_data_flow = _make_module("homeassistant.data_entry_flow")
