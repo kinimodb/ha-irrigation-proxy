@@ -17,6 +17,7 @@ DEFAULT_UPDATE_INTERVAL_SECONDS: Final = 30
 DEFAULT_STATE_VERIFY_DELAY_SECONDS: Final = 5
 DEFAULT_CLOSE_RETRY_MAX: Final = 3
 DEFAULT_SAFETY_MARGIN_SECONDS: Final = 30
+DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS: Final = 30
 
-# Platforms (Sprint 1: switch only)
-PLATFORMS: Final[list[str]] = ["switch"]
+# Platforms
+PLATFORMS: Final[list[str]] = ["switch", "sensor"]

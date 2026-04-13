@@ -14,11 +14,13 @@ from .const import (
     CONF_ZONES,
     DEFAULT_DURATION_MINUTES,
     DEFAULT_MAX_RUNTIME_MINUTES,
+    DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS,
     DOMAIN,
     PLATFORMS,
 )
 from .coordinator import IrrigationCoordinator
 from .safety import SafetyManager
+from .sequencer import Sequencer
 from .zone import Zone
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,8 +59,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await safety.emergency_shutdown(list(zones.values()))
     _LOGGER.info("Irrigation Proxy: closed all valves on startup (safety)")
 
+    # Sequencer: runs zones in order, one at a time
+    sequencer = Sequencer(
+        hass=hass,
+        zones=list(zones.values()),
+        safety=safety,
+        pause_seconds=DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS,
+    )
+
     # Create coordinator
-    coordinator = IrrigationCoordinator(hass, entry, zones, safety)
+    coordinator = IrrigationCoordinator(hass, entry, zones, safety, sequencer)
+
+    # Wire up on_complete callback to trigger coordinator refresh
+    sequencer._on_complete = coordinator.async_request_refresh
+
     await coordinator.async_config_entry_first_refresh()
 
     # Store coordinator
@@ -71,9 +85,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register options update listener
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
-    # Register HA stop handler – close all valves on shutdown
+    # Register HA stop handler – stop sequencer and close all valves
     async def _on_ha_stop(event: Event) -> None:
-        _LOGGER.info("Irrigation Proxy: HA stopping – closing all valves")
+        _LOGGER.info("Irrigation Proxy: HA stopping – stopping program and closing all valves")
+        await sequencer.stop()
         await safety.emergency_shutdown(list(zones.values()))
 
     entry.async_on_unload(
@@ -87,7 +102,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Irrigation Proxy config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Safety: close all valves on unload
+    # Stop sequencer and close all valves
+    await coordinator.sequencer.stop()
     await coordinator.safety.emergency_shutdown(list(coordinator.zones.values()))
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

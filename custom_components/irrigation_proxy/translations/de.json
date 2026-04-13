@@ -50,5 +50,27 @@
         }
       }
     }
+  },
+  "entity": {
+    "switch": {
+      "program": {
+        "name": "Programm"
+      }
+    },
+    "sensor": {
+      "program_status": {
+        "name": "Programmstatus",
+        "state": {
+          "idle": "Inaktiv",
+          "running": "Läuft"
+        }
+      },
+      "current_zone": {
+        "name": "Aktive Zone"
+      },
+      "zone_time_remaining": {
+        "name": "Verbleibende Zonenzeit"
+      }
+    }
   }
 }

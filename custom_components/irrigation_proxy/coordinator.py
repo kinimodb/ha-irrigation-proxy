@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DEFAULT_UPDATE_INTERVAL_SECONDS, DOMAIN
 from .safety import SafetyManager
+from .sequencer import Sequencer
 from .zone import Zone
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entry: ConfigEntry,
         zones: dict[str, Zone],
         safety: SafetyManager,
+        sequencer: Sequencer,
     ) -> None:
         super().__init__(
             hass,
@@ -36,6 +38,7 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.entry = entry
         self.zones = zones
         self.safety = safety
+        self.sequencer = sequencer
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll valve states, run safety checks, return zone status dict."""
@@ -73,5 +76,8 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Backup safety check for overruns
         await self.safety.check_overruns(list(self.zones.values()))
+
+        # Sequencer progress snapshot
+        data["sequencer"] = self.sequencer.progress
 
         return data
