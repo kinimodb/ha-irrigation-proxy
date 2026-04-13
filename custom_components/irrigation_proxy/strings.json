@@ -1,0 +1,54 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Irrigation Proxy",
+        "description": "Enter a name for this irrigation program.",
+        "data": {
+          "name": "Program name"
+        }
+      },
+      "zones": {
+        "title": "Zone Configuration",
+        "description": "Select the valve switch entities to control and set a default runtime.",
+        "data": {
+          "zones": "Valve entities",
+          "duration_minutes": "Default zone runtime (minutes)"
+        },
+        "data_description": {
+          "zones": "Select one or more switch entities that control irrigation valves.",
+          "duration_minutes": "Default runtime per zone in minutes."
+        }
+      },
+      "safety": {
+        "title": "Safety Settings",
+        "description": "Configure safety limits for valve operation.",
+        "data": {
+          "max_runtime_minutes": "Maximum runtime (minutes)"
+        },
+        "data_description": {
+          "max_runtime_minutes": "Maximum time a valve can stay open before the deadman timer forces it closed."
+        }
+      }
+    },
+    "error": {
+      "no_zones_selected": "Please select at least one valve entity."
+    },
+    "abort": {
+      "already_configured": "An irrigation program with this name already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Irrigation Proxy Options",
+        "description": "Modify zone selection and safety settings.",
+        "data": {
+          "zones": "Valve entities",
+          "duration_minutes": "Default zone runtime (minutes)",
+          "max_runtime_minutes": "Maximum runtime (minutes)"
+        }
+      }
+    }
+  }
+}
