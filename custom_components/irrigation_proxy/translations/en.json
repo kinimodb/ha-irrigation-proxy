@@ -10,31 +10,48 @@
       },
       "zones": {
         "title": "Zone Configuration",
-        "description": "Select the valve switch entities to control and set a default runtime.",
+        "description": "Select the valve switch entities to control and set a default runtime. Per-zone durations can be fine-tuned later in the options.",
         "data": {
           "zones": "Valve entities",
           "duration_minutes": "Default zone runtime (minutes)"
         },
         "data_description": {
           "zones": "Select one or more switch entities that control irrigation valves.",
-          "duration_minutes": "Default runtime per zone in minutes."
+          "duration_minutes": "Default runtime per zone in minutes. Applied to every zone initially – change individual zones later in the options."
         }
       },
       "safety": {
         "title": "Safety & Weather Settings",
-        "description": "Configure safety limits and weather-based irrigation adjustment.",
+        "description": "Configure safety limits and the rain-skip threshold used by the binary sensor.",
         "data": {
           "max_runtime_minutes": "Maximum runtime (minutes)",
-          "rain_threshold_mm": "Rain skip threshold (mm)"
+          "rain_threshold_mm": "Rain threshold (mm)"
         },
         "data_description": {
           "max_runtime_minutes": "Maximum time a valve can stay open before the deadman timer forces it closed.",
-          "rain_threshold_mm": "Combined recent + forecast precipitation (mm) that triggers a rain skip. Irrigation is skipped when this threshold is exceeded."
+          "rain_threshold_mm": "Combined recent + forecast precipitation (mm) that triggers the rain-skip binary sensor."
+        }
+      },
+      "schedule": {
+        "title": "Schedule",
+        "description": "Run the program automatically at the listed times on the selected weekdays. Leave disabled for fully manual control.",
+        "data": {
+          "schedule_enabled": "Enable schedule",
+          "schedule_start_times": "Start times (HH:MM, comma-separated)",
+          "schedule_weekdays": "Active weekdays",
+          "inter_zone_delay_seconds": "Delay between zones (seconds)",
+          "rain_adjust_mode": "Rain adjustment"
+        },
+        "data_description": {
+          "schedule_start_times": "One or more HH:MM entries, e.g. \"06:00, 20:30\".",
+          "inter_zone_delay_seconds": "Pause after each zone finishes, before the next zone starts.",
+          "rain_adjust_mode": "off: ignore rain · hard: skip if rain ≥ threshold · scale: shorten or skip based on planned irrigation vs. expected rain."
         }
       }
     },
     "error": {
-      "no_zones_selected": "Please select at least one valve entity."
+      "no_zones_selected": "Please select at least one valve entity.",
+      "invalid_start_times": "Enter start times as HH:MM, separated by commas (e.g. \"06:00, 20:30\")."
     },
     "abort": {
       "already_configured": "An irrigation program with this name already exists."
@@ -44,13 +61,57 @@
     "step": {
       "init": {
         "title": "Irrigation Proxy Options",
-        "description": "Modify zone selection, safety, and weather settings.",
+        "description": "Modify zone selection and safety/weather settings.",
         "data": {
           "zones": "Valve entities",
           "duration_minutes": "Default zone runtime (minutes)",
           "max_runtime_minutes": "Maximum runtime (minutes)",
-          "rain_threshold_mm": "Rain skip threshold (mm)"
+          "rain_threshold_mm": "Rain threshold (mm)"
         }
+      },
+      "durations": {
+        "title": "Per-Zone Durations",
+        "description": "Set an individual runtime in minutes for each of the {zone_count} selected zones."
+      },
+      "schedule": {
+        "title": "Schedule & Rain Adjustment",
+        "description": "Automatic start times, inter-zone delay and rain handling.",
+        "data": {
+          "schedule_enabled": "Enable schedule",
+          "schedule_start_times": "Start times (HH:MM, comma-separated)",
+          "schedule_weekdays": "Active weekdays",
+          "inter_zone_delay_seconds": "Delay between zones (seconds)",
+          "rain_adjust_mode": "Rain adjustment"
+        },
+        "data_description": {
+          "schedule_start_times": "One or more HH:MM entries, e.g. \"06:00, 20:30\".",
+          "inter_zone_delay_seconds": "Pause after each zone finishes, before the next zone starts.",
+          "rain_adjust_mode": "off: ignore rain · hard: skip if rain ≥ threshold · scale: shorten or skip based on planned irrigation vs. expected rain."
+        }
+      }
+    },
+    "error": {
+      "no_zones_selected": "Please select at least one valve entity.",
+      "invalid_start_times": "Enter start times as HH:MM, separated by commas (e.g. \"06:00, 20:30\")."
+    }
+  },
+  "selector": {
+    "weekdays": {
+      "options": {
+        "mon": "Monday",
+        "tue": "Tuesday",
+        "wed": "Wednesday",
+        "thu": "Thursday",
+        "fri": "Friday",
+        "sat": "Saturday",
+        "sun": "Sunday"
+      }
+    },
+    "rain_adjust_mode": {
+      "options": {
+        "off": "Off – ignore rain",
+        "hard": "Hard – skip if rain ≥ threshold",
+        "scale": "Scale – shorten or skip based on planned irrigation"
       }
     }
   },
@@ -73,6 +134,15 @@
       },
       "zone_time_remaining": {
         "name": "Zone Time Remaining"
+      },
+      "program_total_remaining": {
+        "name": "Program Total Remaining"
+      },
+      "next_start": {
+        "name": "Next Scheduled Start"
+      },
+      "zone_duration": {
+        "name": "Zone Duration"
       },
       "evapotranspiration": {
         "name": "Evapotranspiration"

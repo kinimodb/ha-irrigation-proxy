@@ -10,31 +10,48 @@
       },
       "zones": {
         "title": "Zonen-Konfiguration",
-        "description": "Wähle die Ventil-Entities aus und setze eine Standard-Laufzeit.",
+        "description": "Wähle die Ventil-Entities aus und setze eine Standard-Laufzeit. Die Laufzeit jeder Zone kannst du später in den Optionen individuell anpassen.",
         "data": {
           "zones": "Ventil-Entities",
           "duration_minutes": "Standard-Laufzeit pro Zone (Minuten)"
         },
         "data_description": {
           "zones": "Wähle eine oder mehrere Switch-Entities die Bewässerungsventile steuern.",
-          "duration_minutes": "Standard-Laufzeit pro Zone in Minuten."
+          "duration_minutes": "Wird initial für alle Zonen verwendet – individuelle Werte kannst du später in den Optionen setzen."
         }
       },
       "safety": {
         "title": "Sicherheit & Wetter",
-        "description": "Sicherheitslimits und wetterbasierte Bewässerungsanpassung konfigurieren.",
+        "description": "Sicherheitslimits und Regen-Schwellwert für den Regen-Skip-Binärsensor.",
         "data": {
           "max_runtime_minutes": "Maximale Laufzeit (Minuten)",
           "rain_threshold_mm": "Regen-Schwellwert (mm)"
         },
         "data_description": {
           "max_runtime_minutes": "Maximale Zeit die ein Ventil offen bleiben darf bevor der Deadman-Timer es zwangsweise schließt.",
-          "rain_threshold_mm": "Kombinierter Niederschlag (kürzlich + Vorhersage) in mm, ab dem die Bewässerung übersprungen wird."
+          "rain_threshold_mm": "Kombinierter Niederschlag (kürzlich + Vorhersage) in mm, ab dem der Regen-Skip-Sensor auslöst."
+        }
+      },
+      "schedule": {
+        "title": "Zeitplan",
+        "description": "Programm automatisch zu den angegebenen Zeiten an den gewählten Wochentagen starten. Für rein manuellen Betrieb deaktiviert lassen.",
+        "data": {
+          "schedule_enabled": "Zeitplan aktivieren",
+          "schedule_start_times": "Startzeiten (HH:MM, kommasepariert)",
+          "schedule_weekdays": "Aktive Wochentage",
+          "inter_zone_delay_seconds": "Delay zwischen Zonen (Sekunden)",
+          "rain_adjust_mode": "Regen-Anpassung"
+        },
+        "data_description": {
+          "schedule_start_times": "Eine oder mehrere HH:MM-Zeiten, z. B. „06:00, 20:30“.",
+          "inter_zone_delay_seconds": "Pause nach jeder Zone, bevor die nächste startet.",
+          "rain_adjust_mode": "off: Regen ignorieren · hard: skippen wenn Regen ≥ Schwellwert · scale: verkürzen oder skippen abhängig von geplanter Bewässerung vs. Regenmenge."
         }
       }
     },
     "error": {
-      "no_zones_selected": "Bitte wähle mindestens ein Ventil-Entity aus."
+      "no_zones_selected": "Bitte wähle mindestens ein Ventil-Entity aus.",
+      "invalid_start_times": "Gib Startzeiten als HH:MM an, getrennt durch Kommas (z. B. „06:00, 20:30“)."
     },
     "abort": {
       "already_configured": "Ein Bewässerungsprogramm mit diesem Namen existiert bereits."
@@ -51,6 +68,50 @@
           "max_runtime_minutes": "Maximale Laufzeit (Minuten)",
           "rain_threshold_mm": "Regen-Schwellwert (mm)"
         }
+      },
+      "durations": {
+        "title": "Laufzeit pro Zone",
+        "description": "Individuelle Laufzeit in Minuten für jede der {zone_count} ausgewählten Zonen."
+      },
+      "schedule": {
+        "title": "Zeitplan & Regen-Anpassung",
+        "description": "Automatische Startzeiten, Delay zwischen Zonen und Regen-Behandlung.",
+        "data": {
+          "schedule_enabled": "Zeitplan aktivieren",
+          "schedule_start_times": "Startzeiten (HH:MM, kommasepariert)",
+          "schedule_weekdays": "Aktive Wochentage",
+          "inter_zone_delay_seconds": "Delay zwischen Zonen (Sekunden)",
+          "rain_adjust_mode": "Regen-Anpassung"
+        },
+        "data_description": {
+          "schedule_start_times": "Eine oder mehrere HH:MM-Zeiten, z. B. „06:00, 20:30“.",
+          "inter_zone_delay_seconds": "Pause nach jeder Zone, bevor die nächste startet.",
+          "rain_adjust_mode": "off: Regen ignorieren · hard: skippen wenn Regen ≥ Schwellwert · scale: verkürzen oder skippen abhängig von geplanter Bewässerung vs. Regenmenge."
+        }
+      }
+    },
+    "error": {
+      "no_zones_selected": "Bitte wähle mindestens ein Ventil-Entity aus.",
+      "invalid_start_times": "Gib Startzeiten als HH:MM an, getrennt durch Kommas (z. B. „06:00, 20:30“)."
+    }
+  },
+  "selector": {
+    "weekdays": {
+      "options": {
+        "mon": "Montag",
+        "tue": "Dienstag",
+        "wed": "Mittwoch",
+        "thu": "Donnerstag",
+        "fri": "Freitag",
+        "sat": "Samstag",
+        "sun": "Sonntag"
+      }
+    },
+    "rain_adjust_mode": {
+      "options": {
+        "off": "Aus – Regen ignorieren",
+        "hard": "Hart – Skip wenn Regen ≥ Schwellwert",
+        "scale": "Skalieren – verkürzen oder skippen basierend auf geplanter Bewässerung"
       }
     }
   },
@@ -73,6 +134,15 @@
       },
       "zone_time_remaining": {
         "name": "Verbleibende Zonenzeit"
+      },
+      "program_total_remaining": {
+        "name": "Gesamt-Restzeit"
+      },
+      "next_start": {
+        "name": "Nächster geplanter Start"
+      },
+      "zone_duration": {
+        "name": "Zonen-Laufzeit"
       },
       "evapotranspiration": {
         "name": "Evapotranspiration"

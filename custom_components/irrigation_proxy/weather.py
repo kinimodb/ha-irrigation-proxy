@@ -72,6 +72,19 @@ class WeatherProvider:
         """Current weather data snapshot."""
         return self._data
 
+    @property
+    def rain_threshold_mm(self) -> float:
+        """Configured rain-skip threshold in mm (read-only)."""
+        return self._rain_threshold_mm
+
+    @property
+    def total_rain_mm(self) -> float:
+        """Combined recent + forecast rainfall in mm (best available data)."""
+        return float(
+            (self._data.precipitation_last_24h or 0.0)
+            + (self._data.precipitation_forecast_24h or 0.0)
+        )
+
     async def async_update(self) -> WeatherData:
         """Fetch weather data if rate limit allows, return current data."""
         now = datetime.now(timezone.utc)

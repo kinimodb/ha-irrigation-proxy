@@ -33,6 +33,8 @@ class Sequencer:
     - Integrates with SafetyManager (deadman timer per zone)
     - Cleanly cancellable via stop()
     - Reports progress for UI sensors
+    - Supports a duration multiplier so the scheduler can scale runs down
+      when rain is expected (see scheduler.py).
     """
 
     def __init__(
@@ -54,6 +56,10 @@ class Sequencer:
         self._current_zone: Zone | None = None
         self._zone_started_at: datetime | None = None
         self._task: asyncio.Task[None] | None = None
+
+        # Run-local settings set by start()
+        self._duration_multiplier: float = 1.0
+        self._current_zone_duration_seconds: int = 0
 
     # -- Properties for UI / Coordinator ---------------------------------
 
@@ -78,6 +84,20 @@ class Sequencer:
         return len(self._zones)
 
     @property
+    def pause_seconds(self) -> int:
+        """Configured inter-zone delay in seconds."""
+        return self._pause_seconds
+
+    @pause_seconds.setter
+    def pause_seconds(self, value: int) -> None:
+        self._pause_seconds = max(0, int(value))
+
+    @property
+    def zones(self) -> list[Zone]:
+        """List of configured zones (read-only snapshot)."""
+        return list(self._zones)
+
+    @property
     def next_zone(self) -> Zone | None:
         """Next zone in the queue, or None if last/idle."""
         if self._current_index < 0:
@@ -94,10 +114,55 @@ class Sequencer:
             return None
         if self._current_index >= len(self._zones):
             return None
-        zone = self._zones[self._current_index]
-        duration_sec = zone.duration_minutes * 60
-        elapsed = (datetime.now(timezone.utc) - self._zone_started_at).total_seconds()
-        return max(0, int(duration_sec - elapsed))
+        duration_sec = self._current_zone_duration_seconds
+        if duration_sec <= 0 and self._current_zone is not None:
+            # Fallback when _run() hasn't recorded the effective duration yet
+            duration_sec = int(
+                self._current_zone.duration_seconds * self._duration_multiplier
+            )
+        elapsed = (
+            datetime.now(timezone.utc) - self._zone_started_at
+        ).total_seconds()
+        return max(0, int(round(duration_sec - elapsed)))
+
+    @property
+    def total_program_seconds_idle(self) -> int:
+        """Total program runtime in seconds assuming no multiplier.
+
+        Used for the idle "total program duration" display – sum of all
+        zone durations plus the inter-zone delays between them.
+        """
+        if not self._zones:
+            return 0
+        zone_sum = sum(z.duration_seconds for z in self._zones)
+        gaps = max(0, len(self._zones) - 1) * max(0, self._pause_seconds)
+        return int(zone_sum + gaps)
+
+    @property
+    def total_remaining_seconds(self) -> int | None:
+        """Approximate seconds remaining across the full program.
+
+        When idle, returns total_program_seconds_idle so the UI can still
+        show "how long a run would take". When running, sums the remaining
+        current-zone seconds, the pending zones and the inter-zone gaps.
+        """
+        if self._state == SequencerState.IDLE:
+            return self.total_program_seconds_idle
+
+        if self._current_index < 0:
+            return None
+
+        current_remaining = self.remaining_zone_seconds or 0
+        pending_zones = self._zones[self._current_index + 1 :]
+        pending_seconds = int(
+            sum(
+                int(z.duration_seconds * self._duration_multiplier)
+                for z in pending_zones
+            )
+        )
+        # Gap before each pending zone (from current → next, etc.)
+        gaps = len(pending_zones) * max(0, self._pause_seconds)
+        return int(current_remaining + pending_seconds + gaps)
 
     @property
     def progress(self) -> dict[str, Any]:
@@ -112,14 +177,32 @@ class Sequencer:
             "total_zones": len(self._zones),
             "next_zone": self.next_zone.name if self.next_zone else None,
             "remaining_zone_seconds": self.remaining_zone_seconds,
+            "total_remaining_seconds": self.total_remaining_seconds,
+            "pause_seconds": self._pause_seconds,
+            "duration_multiplier": self._duration_multiplier,
+            "zones": [
+                {
+                    "name": z.name,
+                    "valve_entity_id": z.valve_entity_id,
+                    "duration_minutes": z.duration_minutes,
+                    "duration_seconds": z.duration_seconds,
+                }
+                for z in self._zones
+            ],
         }
 
     # -- Control ---------------------------------------------------------
 
-    async def start(self) -> None:
+    async def start(self, duration_multiplier: float = 1.0) -> None:
         """Start the sequencer program.
 
         Runs all zones in order. No-op if already running.
+
+        Args:
+            duration_multiplier: Scale factor (0.0–1.0) applied to every
+                zone's duration for this run. Used by the scheduler to
+                shorten runs when some rain is expected. Values ≤ 0 are
+                treated as "skip entirely".
         """
         if self._state == SequencerState.RUNNING:
             _LOGGER.warning("Sequencer: start() called while already running")
@@ -129,8 +212,19 @@ class Sequencer:
             _LOGGER.warning("Sequencer: no zones configured, nothing to run")
             return
 
+        if duration_multiplier <= 0:
+            _LOGGER.info(
+                "Sequencer: start() called with multiplier=%.2f – skipping run",
+                duration_multiplier,
+            )
+            return
+
+        self._duration_multiplier = min(1.0, max(0.0, float(duration_multiplier)))
+
         _LOGGER.info(
-            "Sequencer: starting program with %d zones", len(self._zones)
+            "Sequencer: starting program with %d zones (multiplier=%.2f)",
+            len(self._zones),
+            self._duration_multiplier,
         )
         self._state = SequencerState.RUNNING
         self._task = self._hass.async_create_task(
@@ -181,14 +275,19 @@ class Sequencer:
             for i, zone in enumerate(self._zones):
                 self._current_index = i
                 self._current_zone = zone
+                self._current_zone_duration_seconds = max(
+                    1, int(zone.duration_seconds * self._duration_multiplier)
+                )
                 self._zone_started_at = datetime.now(timezone.utc)
 
                 _LOGGER.info(
-                    "Sequencer: starting zone %d/%d '%s' for %d min",
+                    "Sequencer: starting zone %d/%d '%s' for %ds (cfg %dmin × %.2f)",
                     i + 1,
                     len(self._zones),
                     zone.name,
+                    self._current_zone_duration_seconds,
                     zone.duration_minutes,
+                    self._duration_multiplier,
                 )
 
                 # Open the valve
@@ -204,7 +303,7 @@ class Sequencer:
                 self._safety.start_deadman(zone)
 
                 # Warten bis Dauer abgelaufen
-                await asyncio.sleep(zone.duration_minutes * 60)
+                await asyncio.sleep(self._current_zone_duration_seconds)
 
                 # Ventil schließen
                 await zone.turn_off(self._hass)
@@ -220,6 +319,7 @@ class Sequencer:
                     )
                     self._current_zone = None
                     self._zone_started_at = None
+                    self._current_zone_duration_seconds = 0
                     await asyncio.sleep(self._pause_seconds)
 
             _LOGGER.info("Sequencer: program completed successfully")
@@ -252,4 +352,6 @@ class Sequencer:
         self._current_index = -1
         self._current_zone = None
         self._zone_started_at = None
+        self._current_zone_duration_seconds = 0
+        self._duration_multiplier = 1.0
         self._task = None

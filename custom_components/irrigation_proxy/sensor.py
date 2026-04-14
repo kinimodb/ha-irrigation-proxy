@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -30,7 +31,15 @@ async def async_setup_entry(
         ProgramStatusSensor(coordinator, entry),
         CurrentZoneSensor(coordinator, entry),
         ZoneTimeRemainingSensor(coordinator, entry),
+        ProgramTotalRemainingSensor(coordinator, entry),
+        NextStartSensor(coordinator, entry),
     ]
+
+    # One duration sensor per configured zone
+    entities.extend(
+        ZoneDurationSensor(coordinator, entry, valve_id)
+        for valve_id in coordinator.zones
+    )
 
     # Weather sensors (only if weather provider is configured)
     if coordinator.weather is not None:
@@ -70,6 +79,12 @@ class _BaseSensor(CoordinatorEntity[IrrigationCoordinator], SensorEntity):
         if self.coordinator.data is None:
             return {}
         return self.coordinator.data.get("sequencer", {})
+
+    def _sched_data(self) -> dict[str, Any]:
+        """Helper to read scheduler data from coordinator."""
+        if self.coordinator.data is None:
+            return {}
+        return self.coordinator.data.get("scheduler", {}) or {}
 
 
 class ProgramStatusSensor(_BaseSensor):
@@ -131,7 +146,7 @@ class CurrentZoneSensor(_BaseSensor):
 
 
 class ZoneTimeRemainingSensor(_BaseSensor):
-    """Shows remaining seconds on the current zone."""
+    """Seconds left on the current zone; idle fallback shows the next zone's duration."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
@@ -149,7 +164,122 @@ class ZoneTimeRemainingSensor(_BaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        return self._seq_data().get("remaining_zone_seconds")
+        seq = self._seq_data()
+        if seq.get("state") == "running":
+            return seq.get("remaining_zone_seconds")
+
+        # Idle fallback – surface the first configured zone's planned duration
+        # so the UI never says "unknown".
+        zones = seq.get("zones") or []
+        if zones:
+            return int(zones[0].get("duration_seconds") or 0)
+        return 0
+
+
+class ProgramTotalRemainingSensor(_BaseSensor):
+    """Seconds remaining across the whole program (or total runtime when idle)."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = "s"
+    _attr_icon = "mdi:timer-sand"
+    _attr_translation_key = "program_total_remaining"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_program_total_remaining"
+        self._attr_name = "Program Total Remaining"
+
+    @property
+    def native_value(self) -> int | None:
+        return self._seq_data().get("total_remaining_seconds")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        seq = self._seq_data()
+        return {
+            "inter_zone_delay_seconds": seq.get("pause_seconds"),
+            "duration_multiplier": seq.get("duration_multiplier"),
+        }
+
+
+class NextStartSensor(_BaseSensor):
+    """Next scheduled program start time, or unknown if not scheduled."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:calendar-clock"
+    _attr_translation_key = "next_start"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_next_start"
+        self._attr_name = "Next Scheduled Start"
+
+    @property
+    def native_value(self) -> datetime | None:
+        value = self._sched_data().get("next_fire")
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        sched = self._sched_data()
+        return {
+            "last_fire": sched.get("last_fire"),
+            "last_skip_reason": sched.get("last_skip_reason"),
+            "last_multiplier": sched.get("last_multiplier"),
+        }
+
+
+class ZoneDurationSensor(_BaseSensor):
+    """Per-zone configured duration in seconds (always populated)."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = "s"
+    _attr_icon = "mdi:timer-cog-outline"
+    _attr_translation_key = "zone_duration"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+        valve_entity_id: str,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._valve_entity_id = valve_entity_id
+        zone = coordinator.zones[valve_entity_id]
+        self._attr_unique_id = (
+            f"{entry.entry_id}_{valve_entity_id}_duration"
+        )
+        self._attr_name = f"{zone.name} Duration"
+
+    @property
+    def native_value(self) -> int:
+        zone = self.coordinator.zones.get(self._valve_entity_id)
+        if zone is None:
+            return 0
+        return zone.duration_seconds
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        zone = self.coordinator.zones.get(self._valve_entity_id)
+        if zone is None:
+            return {}
+        return {
+            "duration_minutes": zone.duration_minutes,
+            "valve_entity_id": self._valve_entity_id,
+        }
 
 
 # -- Weather sensors --------------------------------------------------------

@@ -123,6 +123,11 @@ if not _HA_AVAILABLE:
     ha_selector.NumberSelector = MagicMock  # type: ignore[attr-defined]
     ha_selector.NumberSelectorConfig = MagicMock  # type: ignore[attr-defined]
     ha_selector.NumberSelectorMode = MagicMock  # type: ignore[attr-defined]
+    ha_selector.SelectSelector = MagicMock  # type: ignore[attr-defined]
+    ha_selector.SelectSelectorConfig = MagicMock  # type: ignore[attr-defined]
+    ha_selector.SelectSelectorMode = MagicMock  # type: ignore[attr-defined]
+    ha_selector.BooleanSelector = MagicMock  # type: ignore[attr-defined]
+    ha_selector.TextSelector = MagicMock  # type: ignore[attr-defined]
 
     # --- homeassistant.components ---
     _make_module("homeassistant.components")
@@ -145,6 +150,12 @@ if not _HA_AVAILABLE:
     # --- homeassistant.helpers.aiohttp_client ---
     ha_aiohttp = _make_module("homeassistant.helpers.aiohttp_client")
     ha_aiohttp.async_get_clientsession = MagicMock  # type: ignore[attr-defined]
+
+    # --- homeassistant.helpers.event ---
+    ha_event = _make_module("homeassistant.helpers.event")
+    ha_event.async_track_time_change = MagicMock(return_value=lambda: None)  # type: ignore[attr-defined]
+    ha_event.async_track_time_interval = MagicMock(return_value=lambda: None)  # type: ignore[attr-defined]
+    ha_event.async_track_state_change_event = MagicMock(return_value=lambda: None)  # type: ignore[attr-defined]
 
     # --- homeassistant.data_entry_flow ---
     ha_data_flow = _make_module("homeassistant.data_entry_flow")
