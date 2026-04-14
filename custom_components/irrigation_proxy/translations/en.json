@@ -21,13 +21,15 @@
         }
       },
       "safety": {
-        "title": "Safety Settings",
-        "description": "Configure safety limits for valve operation.",
+        "title": "Safety & Weather Settings",
+        "description": "Configure safety limits and weather-based irrigation adjustment.",
         "data": {
-          "max_runtime_minutes": "Maximum runtime (minutes)"
+          "max_runtime_minutes": "Maximum runtime (minutes)",
+          "rain_threshold_mm": "Rain skip threshold (mm)"
         },
         "data_description": {
-          "max_runtime_minutes": "Maximum time a valve can stay open before the deadman timer forces it closed."
+          "max_runtime_minutes": "Maximum time a valve can stay open before the deadman timer forces it closed.",
+          "rain_threshold_mm": "Combined recent + forecast precipitation (mm) that triggers a rain skip. Irrigation is skipped when this threshold is exceeded."
         }
       }
     },
@@ -42,11 +44,12 @@
     "step": {
       "init": {
         "title": "Irrigation Proxy Options",
-        "description": "Modify zone selection and safety settings.",
+        "description": "Modify zone selection, safety, and weather settings.",
         "data": {
           "zones": "Valve entities",
           "duration_minutes": "Default zone runtime (minutes)",
-          "max_runtime_minutes": "Maximum runtime (minutes)"
+          "max_runtime_minutes": "Maximum runtime (minutes)",
+          "rain_threshold_mm": "Rain skip threshold (mm)"
         }
       }
     }
@@ -70,7 +73,28 @@
       },
       "zone_time_remaining": {
         "name": "Zone Time Remaining"
+      },
+      "evapotranspiration": {
+        "name": "Evapotranspiration"
+      },
+      "water_need_factor": {
+        "name": "Water Need Factor"
       }
+    },
+    "binary_sensor": {
+      "rain_skip": {
+        "name": "Rain Skip"
+      }
+    }
+  },
+  "services": {
+    "start_program": {
+      "name": "Start Irrigation Program",
+      "description": "Start the configured irrigation program. Runs all zones sequentially."
+    },
+    "stop_program": {
+      "name": "Stop Irrigation Program",
+      "description": "Stop the running irrigation program and close all valves."
     }
   }
 }

@@ -13,9 +13,11 @@ from .const import (
     CONF_DURATION_MINUTES,
     CONF_MAX_RUNTIME_MINUTES,
     CONF_NAME,
+    CONF_RAIN_THRESHOLD_MM,
     CONF_ZONES,
     DEFAULT_DURATION_MINUTES,
     DEFAULT_MAX_RUNTIME_MINUTES,
+    DEFAULT_RAIN_THRESHOLD_MM,
     DOMAIN,
 )
 
@@ -122,6 +124,18 @@ class IrrigationProxyConfigFlow(ConfigFlow, domain=DOMAIN):
                             unit_of_measurement="min",
                         )
                     ),
+                    vol.Required(
+                        CONF_RAIN_THRESHOLD_MM,
+                        default=DEFAULT_RAIN_THRESHOLD_MM,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1.0,
+                            max=50.0,
+                            step=0.5,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="mm",
+                        )
+                    ),
                 }
             ),
         )
@@ -200,6 +214,21 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                             step=5,
                             mode=selector.NumberSelectorMode.BOX,
                             unit_of_measurement="min",
+                        )
+                    ),
+                    vol.Required(
+                        CONF_RAIN_THRESHOLD_MM,
+                        default=current_data.get(
+                            CONF_RAIN_THRESHOLD_MM,
+                            DEFAULT_RAIN_THRESHOLD_MM,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1.0,
+                            max=50.0,
+                            step=0.5,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="mm",
                         )
                     ),
                 }

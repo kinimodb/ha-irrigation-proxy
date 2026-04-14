@@ -1,4 +1,4 @@
-"""Sensor entities for irrigation program visibility."""
+"""Sensor entities for irrigation program visibility and weather data."""
 
 from __future__ import annotations
 
@@ -26,13 +26,20 @@ async def async_setup_entry(
     """Set up sensor entities from a config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    async_add_entities(
-        [
-            ProgramStatusSensor(coordinator, entry),
-            CurrentZoneSensor(coordinator, entry),
-            ZoneTimeRemainingSensor(coordinator, entry),
-        ]
-    )
+    entities: list[SensorEntity] = [
+        ProgramStatusSensor(coordinator, entry),
+        CurrentZoneSensor(coordinator, entry),
+        ZoneTimeRemainingSensor(coordinator, entry),
+    ]
+
+    # Weather sensors (only if weather provider is configured)
+    if coordinator.weather is not None:
+        entities.extend([
+            EvapotranspirationSensor(coordinator, entry),
+            WaterNeedFactorSensor(coordinator, entry),
+        ])
+
+    async_add_entities(entities)
 
 
 class _BaseSensor(CoordinatorEntity[IrrigationCoordinator], SensorEntity):
@@ -143,3 +150,90 @@ class ZoneTimeRemainingSensor(_BaseSensor):
     @property
     def native_value(self) -> int | None:
         return self._seq_data().get("remaining_zone_seconds")
+
+
+# -- Weather sensors --------------------------------------------------------
+
+
+class _WeatherSensor(_BaseSensor):
+    """Base class for weather-related sensors."""
+
+    def _weather_data(self) -> dict[str, Any]:
+        """Helper to read weather data from coordinator."""
+        if self.coordinator.data is None:
+            return {}
+        return self.coordinator.data.get("weather", {})
+
+
+class EvapotranspirationSensor(_WeatherSensor):
+    """Shows today's reference evapotranspiration (ET₀) in mm."""
+
+    _attr_icon = "mdi:water-thermometer"
+    _attr_native_unit_of_measurement = "mm"
+    _attr_translation_key = "evapotranspiration"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_evapotranspiration"
+        self._attr_name = "Evapotranspiration"
+
+    @property
+    def native_value(self) -> float | None:
+        et0 = self._weather_data().get("et0_today")
+        if et0 is None:
+            return None
+        return round(et0, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        w = self._weather_data()
+        attrs: dict[str, Any] = {}
+        if "temperature_max" in w:
+            attrs["temperature_max"] = w["temperature_max"]
+        if "last_update" in w:
+            attrs["weather_last_update"] = w["last_update"]
+        if w.get("last_error"):
+            attrs["weather_error"] = w["last_error"]
+        return attrs
+
+
+class WaterNeedFactorSensor(_WeatherSensor):
+    """Shows the current irrigation adjustment factor (0.0 – 2.0).
+
+    Factor > 1.0 = hotter/drier than normal → water more
+    Factor < 1.0 = cooler/wetter than normal → water less
+    Factor = 0.0 = rain skip active → no watering needed
+    """
+
+    _attr_icon = "mdi:water-percent"
+    _attr_native_unit_of_measurement = "x"
+    _attr_translation_key = "water_need_factor"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_water_need_factor"
+        self._attr_name = "Water Need Factor"
+
+    @property
+    def native_value(self) -> float | None:
+        factor = self._weather_data().get("water_need_factor")
+        if factor is None:
+            return None
+        return round(factor, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        w = self._weather_data()
+        return {
+            "precipitation_last_24h": w.get("precipitation_last_24h", 0.0),
+            "precipitation_forecast_24h": w.get("precipitation_forecast_24h", 0.0),
+            "rain_skip": w.get("rain_skip", False),
+        }
