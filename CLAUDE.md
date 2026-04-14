@@ -54,3 +54,47 @@ ha-tadox-proxy (gleicher Entwickler) als Vorlage für:
 - .gitignore (ist gesetzt)
 - LICENSE (MIT, ist gesetzt)
 - hacs.json (ist gesetzt)
+
+## Release Process
+
+Jedes Release wird sowohl über HACS (Tag + GitHub Release) verteilt als auch
+im `CHANGELOG.md` dokumentiert. Reihenfolge und Konventionen:
+
+1. **Versionsnummer bumpen** (Semver):
+   - MAJOR: Breaking-Changes an Config-Schema oder Entity-IDs
+   - MINOR: neue Features oder neue Entitäten
+   - PATCH: reine Bugfixes
+   Die Version lebt ausschließlich in
+   `custom_components/irrigation_proxy/manifest.json` (`"version": "X.Y.Z"`).
+2. **CHANGELOG.md ergänzen** – immer zuerst, im gleichen Commit wie der
+   Version-Bump. Neuer Block oben, Format:
+
+   ```
+   ## vX.Y.Z — YYYY-MM-DD
+
+   ### Added      (neue User-sichtbare Funktionen)
+   ### Changed    (Verhaltensänderungen ohne Break)
+   ### Fixed      (Bugfixes)
+   ### Removed    (entfernte Features / Entitäten)
+   ### Safety     (alle Änderungen am Ventil-/Deadman-Pfad)
+
+   **BREAKING:** …                       (falls vorhanden, mit Migration)
+   ```
+
+   Regeln für Einträge:
+   - **Englisch**, ein Bullet pro User-sichtbarer Änderung, Imperativ
+     ("Add schedule editor" – nicht "Added a schedule editor").
+   - Nur Abschnitte einsetzen, die tatsächlich Inhalt haben; Reihenfolge
+     `Added → Changed → Fixed → Removed → Safety`.
+   - Breaking Changes mit `**BREAKING:**` prefixen und einen Migrations-
+     Block am Ende des Release-Abschnitts anhängen.
+3. **Commit + Push auf `main`** mit sprechender Commit-Message, z. B.
+   `release: v0.4.0`.
+4. **Tag setzen** (`vX.Y.Z`, exakt passend zur manifest-Version) und
+   **GitHub Release** veröffentlichen:
+   - Release-Body = CHANGELOG-Eintrag für dieses Release, 1:1 auf Englisch.
+   - HACS liest Releases anhand des Tags – ohne Tag + Release ist das
+     Update **nicht** über HACS installierbar.
+5. Release-Commits **nie** squash-mergen – der Tag muss auf einen Commit
+   zeigen, der sowohl den Manifest-Bump als auch den CHANGELOG-Eintrag
+   enthält.

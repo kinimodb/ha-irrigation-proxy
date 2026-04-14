@@ -36,6 +36,11 @@ class Zone:
         self.state_mismatch: bool = False
         self.last_state_change: datetime | None = None
 
+    @property
+    def duration_seconds(self) -> int:
+        """Configured per-zone duration in seconds."""
+        return int(self.duration_minutes * 60)
+
     async def turn_on(self, hass: HomeAssistant) -> bool:
         """Open the valve and verify state.
 

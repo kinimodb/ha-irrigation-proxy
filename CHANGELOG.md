@@ -1,0 +1,86 @@
+# Changelog
+
+All notable changes to the Irrigation Proxy integration are documented in
+this file. See the Release Process section in `CLAUDE.md` for the rules
+that govern every entry.
+
+## v0.4.0 — 2026-04-14
+
+### Added
+- Add schedule editor to the config and options flows – configure multiple
+  daily start times, active weekdays, inter-zone delay and an optional
+  rain-based adjustment mode per program.
+- Add per-zone duration configuration. Every zone can now have its own
+  runtime in minutes; a new options step renders one slider per selected
+  zone.
+- Add `Zone Duration` sensor for every configured zone (duration in
+  seconds) so the planned runtime is always visible, even when the program
+  is idle.
+- Add `Program Total Remaining` sensor reflecting the full program runtime
+  while idle and the live remaining time across all pending zones while
+  running.
+- Add `Next Scheduled Start` timestamp sensor surfacing the upcoming
+  automatic run.
+- Expose the new `rain_adjust_mode` option (`off` / `hard` / `scale`) so
+  rain can optionally skip or shorten scheduled runs without changing the
+  semantics of the existing `Rain Skip` binary sensor.
+
+### Changed
+- Refresh timer sensors every second while the program is running instead
+  of every 30 seconds. The coordinator keeps its 30-second poll cycle for
+  external IO (Home Assistant states, Open-Meteo) and runs a dedicated
+  in-memory 1 Hz ticker only while the sequencer is active.
+- Zone switch entities now read their state directly from the underlying
+  valve and are pushed by a state-change listener, so they flip within
+  ~1 s of the real valve changing instead of waiting for the next poll.
+- Program switch exposes richer attributes: total program remaining
+  seconds, duration multiplier, inter-zone delay, per-zone planned
+  durations and the next scheduled start.
+- Inter-zone delay is now user-configurable (previously hardcoded to
+  30 s).
+
+### Fixed
+- `Zone Time Remaining` sensor no longer reports `unknown` while idle.
+  When no program is running it falls back to the configured duration of
+  the first zone so the UI always shows a sensible value.
+
+### Safety
+- Sequencer still opens at most one zone at a time and arms a deadman
+  timer per zone; the new duration multiplier never exceeds 1.0, so
+  rain-aware runs can only shorten (never extend) the configured time.
+
+## v0.3.0 — 2026-04-12
+
+### Added
+- Weather-aware smart irrigation. Open-Meteo provides ET₀, recent and
+  forecast precipitation; a `Water Need Factor` sensor and a `Rain Skip`
+  binary sensor are published and the combined threshold is configurable.
+- New `start_program` and `stop_program` services so automations can
+  trigger the sequencer without a UI click.
+
+### Safety
+- Open-Meteo calls are rate-limited to at most one request every 30 min.
+
+## v0.2.0 — 2026-04-08
+
+### Added
+- Sequential zone irrigation. A new Sequencer runs zones one after the
+  other with a configurable pause between them and reports progress via
+  `Program Status`, `Current Zone` and `Zone Time Remaining` sensors.
+- Program switch entity plus service registration for starting/stopping
+  the sequencer.
+
+### Safety
+- Deadman timer now wraps every zone opened by the sequencer, and
+  sequencer `stop()` closes the active zone before resetting state.
+
+## v0.1.0 — 2026-04-05
+
+### Added
+- Initial HACS-compatible integration skeleton for Sonoff SWV valves:
+  config flow, coordinator, per-zone switches with state verification,
+  and unit tests for the safety-critical paths.
+
+### Safety
+- Safety manager with deadman timers, emergency-shutdown on setup and
+  HA stop, and force-close retries on state mismatch.

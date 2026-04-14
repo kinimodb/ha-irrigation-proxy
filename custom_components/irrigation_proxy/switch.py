@@ -75,21 +75,30 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         if self.coordinator.data is None:
             return {}
         seq = self.coordinator.data.get("sequencer", {})
+        sched = self.coordinator.data.get("scheduler", {})
         return {
             "current_zone": seq.get("current_zone"),
             "total_zones": seq.get("total_zones", 0),
             "current_zone_index": seq.get("current_zone_index", -1),
             "remaining_zone_seconds": seq.get("remaining_zone_seconds"),
+            "total_remaining_seconds": seq.get("total_remaining_seconds"),
+            "inter_zone_delay_seconds": seq.get("pause_seconds"),
+            "duration_multiplier": seq.get("duration_multiplier"),
+            "zones": seq.get("zones", []),
+            "next_scheduled_start": sched.get("next_fire"),
+            "last_skip_reason": sched.get("last_skip_reason"),
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Start the irrigation program."""
         await self.coordinator.sequencer.start()
+        self.coordinator.notify_sequencer_state_changed()
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Stop the irrigation program."""
         await self.coordinator.sequencer.stop()
+        self.coordinator.notify_sequencer_state_changed()
         await self.coordinator.async_request_refresh()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -133,7 +142,17 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return whether the zone valve is currently on."""
+        """Return whether the zone valve is currently on.
+
+        Reads first from the live HA state of the underlying valve (pushed
+        by the coordinator's state_change listener within ~1 s) and falls
+        back to the cached coordinator snapshot.
+        """
+        # Live underlying state – reflects reality immediately once HA sees it.
+        ha_state = self.hass.states.get(self._valve_entity_id) if self.hass else None
+        if ha_state is not None and ha_state.state in ("on", "off"):
+            return ha_state.state == "on"
+
         if self.coordinator.data is None:
             return None
         zone_data = self.coordinator.data.get(self._valve_entity_id)
@@ -152,6 +171,11 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
             attrs["state_mismatch"] = zone_data.get("state_mismatch", False)
             attrs["remaining_seconds"] = zone_data.get("remaining_seconds")
             attrs["duration_minutes"] = zone_data.get("duration_minutes")
+            attrs["duration_seconds"] = (
+                int(zone_data["duration_minutes"] * 60)
+                if zone_data.get("duration_minutes") is not None
+                else None
+            )
         return attrs
 
     async def async_turn_on(self, **kwargs: Any) -> None:
