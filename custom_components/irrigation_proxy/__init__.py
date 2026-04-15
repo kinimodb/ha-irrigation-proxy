@@ -1,4 +1,4 @@
-"""Irrigation Proxy – smart irrigation controller for Sonoff SWV valves."""
+"""Irrigation Proxy – simple sequenced irrigation for HA switch valves."""
 
 from __future__ import annotations
 
@@ -10,21 +10,22 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, ServiceCall
 
 from .const import (
-    CONF_DURATION_MINUTES,
+    CONF_DEPRESSURIZE_SECONDS,
     CONF_INTER_ZONE_DELAY_SECONDS,
+    CONF_MASTER_VALVE,
     CONF_MAX_RUNTIME_MINUTES,
-    CONF_RAIN_ADJUST_MODE,
-    CONF_RAIN_THRESHOLD_MM,
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
-    CONF_ZONE_DURATIONS,
+    CONF_ZONE_DURATION_MINUTES,
+    CONF_ZONE_ID,
+    CONF_ZONE_NAME,
+    CONF_ZONE_VALVE,
     CONF_ZONES,
+    DEFAULT_DEPRESSURIZE_SECONDS,
     DEFAULT_DURATION_MINUTES,
+    DEFAULT_INTER_ZONE_DELAY_SECONDS,
     DEFAULT_MAX_RUNTIME_MINUTES,
-    DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS,
-    DEFAULT_RAIN_ADJUST_MODE,
-    DEFAULT_RAIN_THRESHOLD_MM,
     DEFAULT_SCHEDULE_ENABLED,
     DOMAIN,
     PLATFORMS,
@@ -36,7 +37,6 @@ from .coordinator import IrrigationCoordinator
 from .safety import SafetyManager
 from .scheduler import ProgramScheduler, ScheduleConfig, parse_start_times
 from .sequencer import Sequencer
-from .weather import WeatherProvider
 from .zone import Zone
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,112 +52,93 @@ def _build_schedule_config(entry: ConfigEntry) -> ScheduleConfig:
         enabled=bool(raw.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED)),
         start_times=start_times,
         weekdays=weekdays,
-        rain_adjust_mode=str(
-            raw.get(CONF_RAIN_ADJUST_MODE, DEFAULT_RAIN_ADJUST_MODE)
-        ),
     )
 
 
-def _resolve_zone_duration(
-    raw: dict[str, Any], valve_id: str, default_minutes: int
-) -> int:
-    """Look up the per-zone duration from entry data, falling back to default."""
-    overrides: dict[str, Any] = raw.get(CONF_ZONE_DURATIONS) or {}
-    value = overrides.get(valve_id)
-    if value is None:
-        return int(default_minutes)
-    try:
-        return max(1, int(value))
-    except (TypeError, ValueError):
-        return int(default_minutes)
+def _build_zones(raw: dict[str, Any]) -> list[Zone]:
+    """Translate the CONF_ZONES list of dicts into Zone objects (in order)."""
+    zones_raw = raw.get(CONF_ZONES) or []
+    zones: list[Zone] = []
+    for entry in zones_raw:
+        valve = entry.get(CONF_ZONE_VALVE)
+        if not valve:
+            _LOGGER.warning(
+                "Irrigation Proxy: skipping zone without valve entity: %r", entry
+            )
+            continue
+        name = entry.get(CONF_ZONE_NAME) or valve
+        try:
+            duration = int(
+                entry.get(CONF_ZONE_DURATION_MINUTES, DEFAULT_DURATION_MINUTES)
+            )
+        except (TypeError, ValueError):
+            duration = DEFAULT_DURATION_MINUTES
+        zones.append(
+            Zone(
+                name=name,
+                valve_entity_id=valve,
+                duration_minutes=max(1, duration),
+                zone_id=entry.get(CONF_ZONE_ID),
+            )
+        )
+    return zones
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Irrigation Proxy from a config entry."""
-
     raw = {**entry.data, **entry.options}
 
-    # Parse config
-    zone_entity_ids: list[str] = raw.get(CONF_ZONES, [])
-    default_duration: int = int(
-        raw.get(CONF_DURATION_MINUTES, DEFAULT_DURATION_MINUTES)
-    )
     max_runtime: int = int(
         raw.get(CONF_MAX_RUNTIME_MINUTES, DEFAULT_MAX_RUNTIME_MINUTES)
     )
-    rain_threshold: float = float(
-        raw.get(CONF_RAIN_THRESHOLD_MM, DEFAULT_RAIN_THRESHOLD_MM)
-    )
     inter_zone_delay: int = int(
         raw.get(
-            CONF_INTER_ZONE_DELAY_SECONDS, DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS
+            CONF_INTER_ZONE_DELAY_SECONDS, DEFAULT_INTER_ZONE_DELAY_SECONDS
         )
     )
+    depressurize: int = int(
+        raw.get(CONF_DEPRESSURIZE_SECONDS, DEFAULT_DEPRESSURIZE_SECONDS)
+    )
+    master_valve: str | None = raw.get(CONF_MASTER_VALVE) or None
 
-    # Build Zone objects – keyed by valve_entity_id, honouring per-zone overrides
-    zones: dict[str, Zone] = {}
-    for valve_entity_id in zone_entity_ids:
-        state = hass.states.get(valve_entity_id)
-        if state is not None:
-            name = state.attributes.get("friendly_name", valve_entity_id)
-        else:
-            name = valve_entity_id
+    zones = _build_zones(raw)
 
-        duration_minutes = _resolve_zone_duration(
-            raw, valve_entity_id, default_duration
-        )
-        zones[valve_entity_id] = Zone(
-            name=name,
-            valve_entity_id=valve_entity_id,
-            duration_minutes=duration_minutes,
-        )
-
-    # Safety: close all valves on startup (handles crash recovery)
+    # Safety: close all valves (zones + master) on startup for crash recovery.
     safety = SafetyManager(hass, max_runtime)
-    await safety.emergency_shutdown(list(zones.values()))
+    await safety.emergency_shutdown(zones)
+    if master_valve:
+        try:
+            await hass.services.async_call(
+                "switch",
+                "turn_off",
+                {"entity_id": master_valve},
+                blocking=True,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Irrigation Proxy: failed to force-close master valve on startup"
+            )
     _LOGGER.info("Irrigation Proxy: closed all valves on startup (safety)")
 
-    # Weather: Open-Meteo provider using HA's configured location
-    weather: WeatherProvider | None = None
-    if hasattr(hass, "config") and hasattr(hass.config, "latitude"):
-        weather = WeatherProvider(
-            hass=hass,
-            latitude=hass.config.latitude,
-            longitude=hass.config.longitude,
-            rain_threshold_mm=rain_threshold,
-        )
-        _LOGGER.info(
-            "Irrigation Proxy: weather provider configured (%.2f, %.2f)",
-            hass.config.latitude,
-            hass.config.longitude,
-        )
-
-    # Sequencer: runs zones in order, one at a time
     sequencer = Sequencer(
         hass=hass,
-        zones=list(zones.values()),
+        zones=zones,
         safety=safety,
         pause_seconds=inter_zone_delay,
+        master_valve_entity_id=master_valve,
+        depressurize_seconds=depressurize,
     )
 
-    # Create coordinator
-    coordinator = IrrigationCoordinator(
-        hass, entry, zones, safety, sequencer, weather
-    )
+    coordinator = IrrigationCoordinator(hass, entry, zones, safety, sequencer)
 
-    # Scheduler – fires sequencer at configured start times, honouring
-    # the selected rain_adjust_mode.
     scheduler = ProgramScheduler(
         hass=hass,
         sequencer=sequencer,
-        weather=weather,
         get_config=lambda: _build_schedule_config(entry),
         on_fire=coordinator.async_request_refresh,
     )
     coordinator.set_scheduler(scheduler)
 
-    # Wire up on_complete callback: sequencer finished → refresh coordinator +
-    # flip the 1 Hz ticker off.
     def _on_sequencer_complete() -> None:
         coordinator.notify_sequencer_state_changed()
         hass.async_create_task(coordinator.async_request_refresh())
@@ -166,32 +147,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
-    # Store coordinator
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    # Forward platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # Now that entities exist, enable live state tracking + schedule triggers
     coordinator.start_state_tracking()
     scheduler.reload()
 
-    # Register services (once per domain, not per entry)
     if not hass.services.has_service(DOMAIN, SERVICE_START_PROGRAM):
         _async_register_services(hass)
 
-    # Register options update listener
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
-    # Register HA stop handler – stop sequencer and close all valves
     async def _on_ha_stop(event: Event) -> None:
         _LOGGER.info(
-            "Irrigation Proxy: HA stopping – stopping program and closing all valves"
+            "Irrigation Proxy: HA stopping – closing program and all valves"
         )
         scheduler.unregister()
         await sequencer.stop()
-        await safety.emergency_shutdown(list(zones.values()))
+        await safety.emergency_shutdown(zones)
 
     entry.async_on_unload(
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_ha_stop)
@@ -206,18 +181,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Irrigation Proxy config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Stop sequencer and close all valves
     await coordinator.sequencer.stop()
     if coordinator.scheduler is not None:
         coordinator.scheduler.unregister()
     coordinator.stop_state_tracking()
-    await coordinator.safety.emergency_shutdown(list(coordinator.zones.values()))
+    await coordinator.safety.emergency_shutdown(coordinator.zones)
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
 
-    # Unregister services when no entries remain
     remaining = {
         k for k in hass.data.get(DOMAIN, {}) if k != entry.entry_id
     }
@@ -229,10 +202,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 def _async_register_services(hass: HomeAssistant) -> None:
-    """Register domain-level services for automation."""
+    """Register domain-level services."""
 
     async def _handle_start_program(call: ServiceCall) -> None:
-        """Start the irrigation program on all entries."""
         for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
             if not isinstance(coordinator, IrrigationCoordinator):
                 continue
@@ -242,7 +214,6 @@ def _async_register_services(hass: HomeAssistant) -> None:
             await coordinator.async_request_refresh()
 
     async def _handle_stop_program(call: ServiceCall) -> None:
-        """Stop the irrigation program on all entries."""
         for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
             if not isinstance(coordinator, IrrigationCoordinator):
                 continue
@@ -260,5 +231,5 @@ def _async_register_services(hass: HomeAssistant) -> None:
 async def _async_options_updated(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Handle options update by reloading the config entry."""
+    """Reload the config entry when options change."""
     await hass.config_entries.async_reload(entry.entry_id)

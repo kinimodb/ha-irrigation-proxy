@@ -1,20 +1,8 @@
 """Program scheduler – triggers sequencer.start() at configured times.
 
-Listens for scheduled (weekday × time) triggers. When one fires:
-
-1. Checks the configured weekday mask.
-2. Consults the WeatherProvider for the selected rain-adjust mode:
-   - "off":   always start at 100 %.
-   - "hard":  if combined rain ≥ rain_threshold → skip entirely.
-   - "scale": compute planned_mm (Σ duration × ASSUMED_FLOW_MM_PER_MIN);
-              if rain ≥ planned_mm → skip; otherwise scale each zone by
-              (planned_mm − rain) / planned_mm.
-3. Calls sequencer.start(duration_multiplier=...).
-
-The scheduler is intentionally decoupled from Home Assistant's config
-machinery – it receives the already-parsed schedule via register(). The
-coordinator handles lifecycle (register at setup, unregister on unload /
-options update).
+The scheduler is intentionally narrow in v0.5.0: no rain handling, no
+duration scaling. It just watches weekday × HH:MM triggers and kicks
+the sequencer when one of them fires and the weekday mask matches.
 """
 
 from __future__ import annotations
@@ -28,17 +16,10 @@ from typing import TYPE_CHECKING
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
 
-from .const import (
-    ASSUMED_FLOW_MM_PER_MIN,
-    RAIN_ADJUST_HARD,
-    RAIN_ADJUST_OFF,
-    RAIN_ADJUST_SCALE,
-    WEEKDAYS,
-)
+from .const import WEEKDAYS
 
 if TYPE_CHECKING:
     from .sequencer import Sequencer
-    from .weather import WeatherProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +31,6 @@ class ScheduleConfig:
     enabled: bool = False
     start_times: list[time] = field(default_factory=list)
     weekdays: set[str] = field(default_factory=set)
-    rain_adjust_mode: str = RAIN_ADJUST_OFF
 
     def matches_today(self, now: datetime) -> bool:
         """Return True if `now`'s weekday is in the schedule's mask."""
@@ -87,7 +67,7 @@ def parse_start_times(raw: str | list[str] | None) -> list[time]:
 
 
 def format_start_times(values: list[time] | list[str] | None) -> str:
-    """Render a schedule_start_times value back to a comma-separated string."""
+    """Render schedule_start_times back to a comma-separated string."""
     if not values:
         return ""
     parts: list[str] = []
@@ -97,39 +77,6 @@ def format_start_times(values: list[time] | list[str] | None) -> str:
         else:
             parts.append(str(v))
     return ", ".join(parts)
-
-
-def compute_duration_multiplier(
-    mode: str,
-    zones_total_minutes: float,
-    rain_mm: float,
-    rain_threshold_mm: float,
-    *,
-    flow_mm_per_min: float = ASSUMED_FLOW_MM_PER_MIN,
-) -> float:
-    """Return a 0..1 multiplier for the planned run based on rain + mode.
-
-    0.0 means "skip entirely". 1.0 means "run at full duration".
-    """
-    if mode == RAIN_ADJUST_OFF:
-        return 1.0
-
-    if mode == RAIN_ADJUST_HARD:
-        if rain_mm >= rain_threshold_mm:
-            return 0.0
-        return 1.0
-
-    if mode == RAIN_ADJUST_SCALE:
-        planned_mm = max(0.0, zones_total_minutes * flow_mm_per_min)
-        if planned_mm <= 0:
-            return 1.0
-        if rain_mm >= planned_mm:
-            return 0.0
-        remaining = max(0.0, planned_mm - rain_mm)
-        return min(1.0, remaining / planned_mm)
-
-    _LOGGER.warning("Scheduler: unknown rain_adjust_mode %r – running at 100%%", mode)
-    return 1.0
 
 
 def next_fire_time(
@@ -160,19 +107,15 @@ class ProgramScheduler:
         self,
         hass: HomeAssistant,
         sequencer: "Sequencer",
-        weather: "WeatherProvider | None",
         get_config: Callable[[], ScheduleConfig],
         on_fire: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._hass = hass
         self._sequencer = sequencer
-        self._weather = weather
         self._get_config = get_config
         self._on_fire = on_fire
         self._unsubs: list[Callable[[], None]] = []
         self._last_fire: datetime | None = None
-        self._last_multiplier: float = 1.0
-        self._last_skip_reason: str | None = None
 
     # -- Lifecycle -------------------------------------------------------
 
@@ -222,14 +165,6 @@ class ProgramScheduler:
     def last_fire(self) -> datetime | None:
         return self._last_fire
 
-    @property
-    def last_skip_reason(self) -> str | None:
-        return self._last_skip_reason
-
-    @property
-    def last_multiplier(self) -> float:
-        return self._last_multiplier
-
     # -- Trigger handling ------------------------------------------------
 
     async def _handle_fire(self, now: datetime) -> None:
@@ -249,66 +184,11 @@ class ProgramScheduler:
 
         self._last_fire = local_now
 
-        multiplier = self._evaluate_multiplier(config)
-        self._last_multiplier = multiplier
-
-        if multiplier <= 0:
-            _LOGGER.info(
-                "Scheduler: skipping scheduled run (reason=%s)",
-                self._last_skip_reason or "unknown",
-            )
-            return
-
-        self._last_skip_reason = None
-        _LOGGER.info(
-            "Scheduler: starting program via schedule (multiplier=%.2f)",
-            multiplier,
-        )
-        await self._sequencer.start(duration_multiplier=multiplier)
+        _LOGGER.info("Scheduler: starting program via schedule")
+        await self._sequencer.start()
 
         if self._on_fire is not None:
             try:
                 await self._on_fire()
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Scheduler: on_fire callback raised")
-
-    def _evaluate_multiplier(self, config: ScheduleConfig) -> float:
-        """Return duration multiplier (0..1) based on weather + mode."""
-        mode = config.rain_adjust_mode or RAIN_ADJUST_OFF
-
-        if mode == RAIN_ADJUST_OFF:
-            self._last_skip_reason = None
-            return 1.0
-
-        if self._weather is None:
-            # Nothing to decide against – behave as if rain adjust were off.
-            _LOGGER.debug(
-                "Scheduler: rain_adjust_mode=%s but no weather provider – running at 100%%",
-                mode,
-            )
-            return 1.0
-
-        rain_mm = self._weather.total_rain_mm
-        threshold = self._weather.rain_threshold_mm
-        zones_total_minutes = float(
-            sum(z.duration_minutes for z in self._sequencer.zones)
-        )
-
-        multiplier = compute_duration_multiplier(
-            mode=mode,
-            zones_total_minutes=zones_total_minutes,
-            rain_mm=rain_mm,
-            rain_threshold_mm=threshold,
-        )
-
-        if multiplier <= 0:
-            if mode == RAIN_ADJUST_HARD:
-                self._last_skip_reason = (
-                    f"rain {rain_mm:.1f}mm ≥ threshold {threshold:.1f}mm"
-                )
-            else:
-                planned_mm = zones_total_minutes * ASSUMED_FLOW_MM_PER_MIN
-                self._last_skip_reason = (
-                    f"rain {rain_mm:.1f}mm ≥ planned {planned_mm:.1f}mm"
-                )
-        return multiplier

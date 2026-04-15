@@ -1,7 +1,25 @@
-"""Config flow for Irrigation Proxy."""
+"""Config flow for Irrigation Proxy.
+
+v0.5.0 redesign:
+
+* The initial **config flow** only asks for a program name and creates an
+  entry with sensible defaults. All real configuration happens in the
+  **options flow** afterwards.
+* The **options flow** is menu-based (Irrigation v5 style). The user
+  always lands on a menu where they can pick what to edit:
+
+      Basics        – schedule (start times, weekdays), master valve
+      Zones         – list / add / edit / remove zones
+      Advanced      – inter-zone delay, depressurize delay, max runtime
+      Save & Close  – persist everything, reload the entry
+
+All edits are staged in `self._pending` and only written back to the
+config entry when the user picks "Save & Close".
+"""
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 import voluptuous as vol
@@ -10,28 +28,31 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import (
-    CONF_DURATION_MINUTES,
+    CONF_DEPRESSURIZE_SECONDS,
     CONF_INTER_ZONE_DELAY_SECONDS,
+    CONF_MASTER_VALVE,
     CONF_MAX_RUNTIME_MINUTES,
     CONF_NAME,
-    CONF_RAIN_ADJUST_MODE,
-    CONF_RAIN_THRESHOLD_MM,
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
-    CONF_ZONE_DURATIONS,
+    CONF_ZONE_DURATION_MINUTES,
+    CONF_ZONE_ID,
+    CONF_ZONE_NAME,
+    CONF_ZONE_VALVE,
     CONF_ZONES,
+    DEFAULT_DEPRESSURIZE_SECONDS,
     DEFAULT_DURATION_MINUTES,
+    DEFAULT_INTER_ZONE_DELAY_SECONDS,
     DEFAULT_MAX_RUNTIME_MINUTES,
-    DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS,
-    DEFAULT_RAIN_ADJUST_MODE,
-    DEFAULT_RAIN_THRESHOLD_MM,
     DEFAULT_SCHEDULE_ENABLED,
     DOMAIN,
-    RAIN_ADJUST_MODES,
     WEEKDAYS,
 )
 from .scheduler import format_start_times, parse_start_times
+
+
+# -- Selector helpers ------------------------------------------------------
 
 
 def _duration_field() -> Any:
@@ -42,18 +63,6 @@ def _duration_field() -> Any:
             step=1,
             mode=selector.NumberSelectorMode.BOX,
             unit_of_measurement="min",
-        )
-    )
-
-
-def _rain_threshold_field() -> Any:
-    return selector.NumberSelector(
-        selector.NumberSelectorConfig(
-            min=1.0,
-            max=50.0,
-            step=0.5,
-            mode=selector.NumberSelectorMode.BOX,
-            unit_of_measurement="mm",
         )
     )
 
@@ -82,6 +91,18 @@ def _inter_zone_delay_field() -> Any:
     )
 
 
+def _depressurize_field() -> Any:
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0,
+            max=60,
+            step=1,
+            mode=selector.NumberSelectorMode.BOX,
+            unit_of_measurement="s",
+        )
+    )
+
+
 def _weekday_field() -> Any:
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
@@ -93,163 +114,63 @@ def _weekday_field() -> Any:
     )
 
 
-def _rain_adjust_field() -> Any:
-    return selector.SelectSelector(
-        selector.SelectSelectorConfig(
-            multiple=False,
-            options=list(RAIN_ADJUST_MODES),
-            mode=selector.SelectSelectorMode.DROPDOWN,
-            translation_key="rain_adjust_mode",
-        )
+def _switch_entity_field() -> Any:
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(domain="switch", multiple=False)
     )
 
 
-def _validate_start_times(raw: str) -> list[str]:
-    """Return HH:MM strings parsed from raw input, or raise vol.Invalid."""
-    if raw is None:
-        return []
+def _validate_start_times(raw: str | list[str] | None) -> list[str]:
+    """Parse a schedule_start_times input to HH:MM strings."""
     parsed = parse_start_times(raw)
     return [t.strftime("%H:%M") for t in parsed]
 
 
+# -- Default entry data ----------------------------------------------------
+
+
+def _default_entry_data(name: str) -> dict[str, Any]:
+    return {
+        CONF_NAME: name,
+        CONF_ZONES: [],
+        CONF_MASTER_VALVE: None,
+        CONF_SCHEDULE_ENABLED: DEFAULT_SCHEDULE_ENABLED,
+        CONF_SCHEDULE_START_TIMES: [],
+        CONF_SCHEDULE_WEEKDAYS: list(WEEKDAYS),
+        CONF_INTER_ZONE_DELAY_SECONDS: DEFAULT_INTER_ZONE_DELAY_SECONDS,
+        CONF_DEPRESSURIZE_SECONDS: DEFAULT_DEPRESSURIZE_SECONDS,
+        CONF_MAX_RUNTIME_MINUTES: DEFAULT_MAX_RUNTIME_MINUTES,
+    }
+
+
+# -- Config flow -----------------------------------------------------------
+
+
 class IrrigationProxyConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Multi-step config flow: name → zones → safety → schedule."""
+    """Create a new irrigation program (just ask for a name)."""
 
     VERSION = 1
-
-    def __init__(self) -> None:
-        """Initialize the config flow."""
-        self._user_input: dict[str, Any] = {}
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        """Step 1: Program name."""
+        """Ask for a program name, then create the entry with defaults."""
         if user_input is not None:
-            self._user_input.update(user_input)
-
-            # Set unique ID based on name to prevent duplicates
             await self.async_set_unique_id(
                 user_input[CONF_NAME].lower().replace(" ", "_")
             )
             self._abort_if_unique_id_configured()
 
-            return await self.async_step_zones()
+            return self.async_create_entry(
+                title=user_input[CONF_NAME],
+                data=_default_entry_data(user_input[CONF_NAME]),
+            )
 
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_NAME, default="Irrigation"): str,
-                }
+                {vol.Required(CONF_NAME, default="Irrigation"): str}
             ),
-        )
-
-    async def async_step_zones(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        """Step 2: Select valve entities and default duration."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            zones = user_input.get(CONF_ZONES, [])
-            if not zones:
-                errors["base"] = "no_zones_selected"
-            else:
-                self._user_input.update(user_input)
-                return await self.async_step_safety()
-
-        return self.async_show_form(
-            step_id="zones",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_ZONES): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="switch",
-                            multiple=True,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_DURATION_MINUTES,
-                        default=DEFAULT_DURATION_MINUTES,
-                    ): _duration_field(),
-                }
-            ),
-            errors=errors,
-        )
-
-    async def async_step_safety(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        """Step 3: Safety settings."""
-        if user_input is not None:
-            self._user_input.update(user_input)
-            return await self.async_step_schedule()
-
-        return self.async_show_form(
-            step_id="safety",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_MAX_RUNTIME_MINUTES,
-                        default=DEFAULT_MAX_RUNTIME_MINUTES,
-                    ): _max_runtime_field(),
-                    vol.Required(
-                        CONF_RAIN_THRESHOLD_MM,
-                        default=DEFAULT_RAIN_THRESHOLD_MM,
-                    ): _rain_threshold_field(),
-                }
-            ),
-        )
-
-    async def async_step_schedule(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        """Step 4: Schedule (optional)."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            try:
-                user_input[CONF_SCHEDULE_START_TIMES] = _validate_start_times(
-                    user_input.get(CONF_SCHEDULE_START_TIMES, "")
-                )
-            except vol.Invalid:
-                errors[CONF_SCHEDULE_START_TIMES] = "invalid_start_times"
-
-            if not errors:
-                self._user_input.update(user_input)
-                return self.async_create_entry(
-                    title=self._user_input[CONF_NAME],
-                    data=self._user_input,
-                )
-
-        return self.async_show_form(
-            step_id="schedule",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_SCHEDULE_ENABLED,
-                        default=DEFAULT_SCHEDULE_ENABLED,
-                    ): selector.BooleanSelector(),
-                    vol.Optional(
-                        CONF_SCHEDULE_START_TIMES,
-                        default="",
-                    ): selector.TextSelector(),
-                    vol.Optional(
-                        CONF_SCHEDULE_WEEKDAYS,
-                        default=list(WEEKDAYS),
-                    ): _weekday_field(),
-                    vol.Required(
-                        CONF_INTER_ZONE_DELAY_SECONDS,
-                        default=DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS,
-                    ): _inter_zone_delay_field(),
-                    vol.Required(
-                        CONF_RAIN_ADJUST_MODE,
-                        default=DEFAULT_RAIN_ADJUST_MODE,
-                    ): _rain_adjust_field(),
-                }
-            ),
-            errors=errors,
         )
 
     @staticmethod
@@ -259,181 +180,319 @@ class IrrigationProxyConfigFlow(ConfigFlow, domain=DOMAIN):
         return IrrigationProxyOptionsFlow(config_entry)
 
 
+# -- Options flow (menu-based) ---------------------------------------------
+
+
 class IrrigationProxyOptionsFlow(OptionsFlow):
-    """Multi-step options flow: zones/safety → per-zone durations → schedule."""
+    """Menu-based options flow – the main editing surface for the program."""
 
     def __init__(self, config_entry: ConfigEntry) -> None:
-        """Initialize options flow."""
         self._config_entry = config_entry
-        self._pending: dict[str, Any] = {}
+        # Deep-ish working copy; we only touch top-level keys + the zones list.
+        merged = {**config_entry.data, **config_entry.options}
+        self._pending: dict[str, Any] = {
+            **merged,
+            CONF_ZONES: [
+                dict(z) for z in (merged.get(CONF_ZONES) or [])
+            ],
+        }
+        # Scratchpad for "edit a specific zone" sub-step.
+        self._editing_zone_id: str | None = None
 
-    # ---- Step 1: zones + safety ---------------------------------------
+    # ---- Main menu ----------------------------------------------------
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        """Show basic options (zones, default duration, safety)."""
-        errors: dict[str, str] = {}
-        current = {**self._config_entry.data, **self._config_entry.options}
-
-        if user_input is not None:
-            zones = user_input.get(CONF_ZONES, [])
-            if not zones:
-                errors["base"] = "no_zones_selected"
-            else:
-                self._pending.update(user_input)
-                return await self.async_step_durations()
-
-        return self.async_show_form(
+        """Top-level menu – this is what the user lands on."""
+        return self.async_show_menu(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_ZONES,
-                        default=current.get(CONF_ZONES, []),
-                    ): selector.EntitySelector(
-                        selector.EntitySelectorConfig(
-                            domain="switch",
-                            multiple=True,
-                        )
-                    ),
-                    vol.Required(
-                        CONF_DURATION_MINUTES,
-                        default=current.get(
-                            CONF_DURATION_MINUTES, DEFAULT_DURATION_MINUTES
-                        ),
-                    ): _duration_field(),
-                    vol.Required(
-                        CONF_MAX_RUNTIME_MINUTES,
-                        default=current.get(
-                            CONF_MAX_RUNTIME_MINUTES,
-                            DEFAULT_MAX_RUNTIME_MINUTES,
-                        ),
-                    ): _max_runtime_field(),
-                    vol.Required(
-                        CONF_RAIN_THRESHOLD_MM,
-                        default=current.get(
-                            CONF_RAIN_THRESHOLD_MM,
-                            DEFAULT_RAIN_THRESHOLD_MM,
-                        ),
-                    ): _rain_threshold_field(),
-                }
-            ),
-            errors=errors,
+            menu_options=["basics", "zones", "advanced", "save"],
         )
 
-    # ---- Step 2: per-zone durations -----------------------------------
+    # ---- Basics -------------------------------------------------------
 
-    async def async_step_durations(
+    async def async_step_basics(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        """Show one duration slider per currently-selected zone."""
-        current = {**self._config_entry.data, **self._config_entry.options}
-        selected_zones: list[str] = self._pending.get(CONF_ZONES, [])
-        stored_overrides: dict[str, Any] = current.get(CONF_ZONE_DURATIONS, {}) or {}
-        default_minutes = int(
-            self._pending.get(
-                CONF_DURATION_MINUTES,
-                current.get(CONF_DURATION_MINUTES, DEFAULT_DURATION_MINUTES),
-            )
-        )
-
-        if user_input is not None:
-            overrides: dict[str, int] = {}
-            for valve_id in selected_zones:
-                key = _zone_duration_key(valve_id)
-                if key in user_input:
-                    overrides[valve_id] = int(user_input[key])
-            self._pending[CONF_ZONE_DURATIONS] = overrides
-            return await self.async_step_schedule()
-
-        schema: dict[Any, Any] = {}
-        for valve_id in selected_zones:
-            default_val = int(stored_overrides.get(valve_id, default_minutes))
-            schema[
-                vol.Required(
-                    _zone_duration_key(valve_id), default=default_val
-                )
-            ] = _duration_field()
-
-        return self.async_show_form(
-            step_id="durations",
-            data_schema=vol.Schema(schema),
-            description_placeholders={
-                "zone_count": str(len(selected_zones)),
-            },
-        )
-
-    # ---- Step 3: schedule ---------------------------------------------
-
-    async def async_step_schedule(
-        self, user_input: dict[str, Any] | None = None
-    ) -> Any:
-        """Show the schedule settings and persist everything."""
+        """Schedule + master-valve settings."""
         errors: dict[str, str] = {}
-        current = {**self._config_entry.data, **self._config_entry.options}
 
         if user_input is not None:
             try:
-                user_input[CONF_SCHEDULE_START_TIMES] = _validate_start_times(
+                times = _validate_start_times(
                     user_input.get(CONF_SCHEDULE_START_TIMES, "")
                 )
             except vol.Invalid:
                 errors[CONF_SCHEDULE_START_TIMES] = "invalid_start_times"
+                times = []
 
             if not errors:
-                self._pending.update(user_input)
-                # Persist: keep name in data, write everything else to data
-                # (we don't split into options here for v0.4.0 simplicity – a
-                # reload is triggered by the update listener anyway).
-                new_data = {**self._config_entry.data, **self._pending}
-                self.hass.config_entries.async_update_entry(
-                    self._config_entry, data=new_data
+                self._pending[CONF_SCHEDULE_ENABLED] = bool(
+                    user_input.get(CONF_SCHEDULE_ENABLED, False)
                 )
-                return self.async_create_entry(data={})
+                self._pending[CONF_SCHEDULE_START_TIMES] = times
+                self._pending[CONF_SCHEDULE_WEEKDAYS] = list(
+                    user_input.get(CONF_SCHEDULE_WEEKDAYS, [])
+                )
+                master = user_input.get(CONF_MASTER_VALVE) or None
+                self._pending[CONF_MASTER_VALVE] = master
+                return await self.async_step_init()
 
-        existing_times = current.get(CONF_SCHEDULE_START_TIMES, [])
-        default_times = format_start_times(existing_times)
+        existing_times = self._pending.get(CONF_SCHEDULE_START_TIMES, [])
+        schema_dict: dict[Any, Any] = {
+            vol.Required(
+                CONF_SCHEDULE_ENABLED,
+                default=self._pending.get(
+                    CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED
+                ),
+            ): selector.BooleanSelector(),
+            vol.Optional(
+                CONF_SCHEDULE_START_TIMES,
+                default=format_start_times(existing_times),
+            ): selector.TextSelector(),
+            vol.Optional(
+                CONF_SCHEDULE_WEEKDAYS,
+                default=self._pending.get(
+                    CONF_SCHEDULE_WEEKDAYS, list(WEEKDAYS)
+                ),
+            ): _weekday_field(),
+            vol.Optional(
+                CONF_MASTER_VALVE,
+                description={
+                    "suggested_value": self._pending.get(CONF_MASTER_VALVE)
+                    or ""
+                },
+            ): _switch_entity_field(),
+        }
 
         return self.async_show_form(
-            step_id="schedule",
+            step_id="basics",
+            data_schema=vol.Schema(schema_dict),
+            errors=errors,
+        )
+
+    # ---- Zone list ----------------------------------------------------
+
+    async def async_step_zones(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Submenu: add a new zone or edit/remove an existing one."""
+        options: dict[str, str] = {"zone_add": "Add new zone"}
+        for zone in self._pending.get(CONF_ZONES) or []:
+            label = zone.get(CONF_ZONE_NAME) or zone.get(CONF_ZONE_VALVE, "?")
+            options[f"zone_edit_{zone[CONF_ZONE_ID]}"] = label
+        options["init"] = "Back to main menu"
+
+        return self.async_show_menu(
+            step_id="zones",
+            menu_options=options,
+        )
+
+    async def async_step_zone_add(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Form: add a new zone to the end of the list."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            valve = user_input.get(CONF_ZONE_VALVE)
+            if not valve:
+                errors[CONF_ZONE_VALVE] = "valve_required"
+            else:
+                new_zone = {
+                    CONF_ZONE_ID: _new_zone_id(),
+                    CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME, valve),
+                    CONF_ZONE_VALVE: valve,
+                    CONF_ZONE_DURATION_MINUTES: int(
+                        user_input.get(
+                            CONF_ZONE_DURATION_MINUTES,
+                            DEFAULT_DURATION_MINUTES,
+                        )
+                    ),
+                }
+                zones = list(self._pending.get(CONF_ZONES) or [])
+                zones.append(new_zone)
+                self._pending[CONF_ZONES] = zones
+                return await self.async_step_zones()
+
+        return self.async_show_form(
+            step_id="zone_add",
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_ZONE_NAME, default=""): str,
+                    vol.Required(CONF_ZONE_VALVE): _switch_entity_field(),
                     vol.Required(
-                        CONF_SCHEDULE_ENABLED,
-                        default=current.get(
-                            CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED
-                        ),
-                    ): selector.BooleanSelector(),
-                    vol.Optional(
-                        CONF_SCHEDULE_START_TIMES,
-                        default=default_times,
-                    ): selector.TextSelector(),
-                    vol.Optional(
-                        CONF_SCHEDULE_WEEKDAYS,
-                        default=current.get(
-                            CONF_SCHEDULE_WEEKDAYS, list(WEEKDAYS)
-                        ),
-                    ): _weekday_field(),
-                    vol.Required(
-                        CONF_INTER_ZONE_DELAY_SECONDS,
-                        default=current.get(
-                            CONF_INTER_ZONE_DELAY_SECONDS,
-                            DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS,
-                        ),
-                    ): _inter_zone_delay_field(),
-                    vol.Required(
-                        CONF_RAIN_ADJUST_MODE,
-                        default=current.get(
-                            CONF_RAIN_ADJUST_MODE, DEFAULT_RAIN_ADJUST_MODE
-                        ),
-                    ): _rain_adjust_field(),
+                        CONF_ZONE_DURATION_MINUTES,
+                        default=DEFAULT_DURATION_MINUTES,
+                    ): _duration_field(),
                 }
             ),
             errors=errors,
         )
 
+    async def async_step_zone_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Form: edit an existing zone, or delete it."""
+        # The menu routes to zone_edit_<id>; we capture the id via
+        # `async_step_*` dispatch – see __getattr__ below.
+        zone_id = self._editing_zone_id
+        zones = list(self._pending.get(CONF_ZONES) or [])
+        idx = next(
+            (i for i, z in enumerate(zones) if z.get(CONF_ZONE_ID) == zone_id),
+            -1,
+        )
+        if idx < 0:
+            self._editing_zone_id = None
+            return await self.async_step_zones()
 
-def _zone_duration_key(valve_entity_id: str) -> str:
-    """Translate a valve entity_id into a stable form-field key."""
-    return f"duration__{valve_entity_id}"
+        zone = zones[idx]
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            if user_input.get("delete"):
+                zones.pop(idx)
+                self._pending[CONF_ZONES] = zones
+                self._editing_zone_id = None
+                return await self.async_step_zones()
+
+            valve = user_input.get(CONF_ZONE_VALVE)
+            if not valve:
+                errors[CONF_ZONE_VALVE] = "valve_required"
+            else:
+                zones[idx] = {
+                    CONF_ZONE_ID: zone_id,
+                    CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME, valve),
+                    CONF_ZONE_VALVE: valve,
+                    CONF_ZONE_DURATION_MINUTES: int(
+                        user_input.get(
+                            CONF_ZONE_DURATION_MINUTES,
+                            DEFAULT_DURATION_MINUTES,
+                        )
+                    ),
+                }
+                self._pending[CONF_ZONES] = zones
+                self._editing_zone_id = None
+                return await self.async_step_zones()
+
+        return self.async_show_form(
+            step_id="zone_edit",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ZONE_NAME,
+                        default=zone.get(CONF_ZONE_NAME, ""),
+                    ): str,
+                    vol.Required(
+                        CONF_ZONE_VALVE,
+                        default=zone.get(CONF_ZONE_VALVE),
+                    ): _switch_entity_field(),
+                    vol.Required(
+                        CONF_ZONE_DURATION_MINUTES,
+                        default=int(
+                            zone.get(
+                                CONF_ZONE_DURATION_MINUTES,
+                                DEFAULT_DURATION_MINUTES,
+                            )
+                        ),
+                    ): _duration_field(),
+                    vol.Optional("delete", default=False): selector.BooleanSelector(),
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "zone_name": zone.get(CONF_ZONE_NAME) or "?",
+            },
+        )
+
+    # The zone menu generates dynamic step_ids like "zone_edit_<id>".
+    # HA dispatches these as `async_step_zone_edit_<id>` – route them all
+    # through `async_step_zone_edit` after stashing the id.
+    def __getattr__(self, name: str):
+        if name.startswith("async_step_zone_edit_"):
+            zone_id = name[len("async_step_zone_edit_") :]
+
+            async def _dispatch(
+                user_input: dict[str, Any] | None = None,
+            ) -> Any:
+                self._editing_zone_id = zone_id
+                return await self.async_step_zone_edit(user_input)
+
+            return _dispatch
+        raise AttributeError(name)
+
+    # ---- Advanced -----------------------------------------------------
+
+    async def async_step_advanced(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Inter-zone pause, depressurize, max runtime."""
+        if user_input is not None:
+            self._pending[CONF_INTER_ZONE_DELAY_SECONDS] = int(
+                user_input.get(
+                    CONF_INTER_ZONE_DELAY_SECONDS,
+                    DEFAULT_INTER_ZONE_DELAY_SECONDS,
+                )
+            )
+            self._pending[CONF_DEPRESSURIZE_SECONDS] = int(
+                user_input.get(
+                    CONF_DEPRESSURIZE_SECONDS, DEFAULT_DEPRESSURIZE_SECONDS
+                )
+            )
+            self._pending[CONF_MAX_RUNTIME_MINUTES] = int(
+                user_input.get(
+                    CONF_MAX_RUNTIME_MINUTES, DEFAULT_MAX_RUNTIME_MINUTES
+                )
+            )
+            return await self.async_step_init()
+
+        return self.async_show_form(
+            step_id="advanced",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_INTER_ZONE_DELAY_SECONDS,
+                        default=self._pending.get(
+                            CONF_INTER_ZONE_DELAY_SECONDS,
+                            DEFAULT_INTER_ZONE_DELAY_SECONDS,
+                        ),
+                    ): _inter_zone_delay_field(),
+                    vol.Required(
+                        CONF_DEPRESSURIZE_SECONDS,
+                        default=self._pending.get(
+                            CONF_DEPRESSURIZE_SECONDS,
+                            DEFAULT_DEPRESSURIZE_SECONDS,
+                        ),
+                    ): _depressurize_field(),
+                    vol.Required(
+                        CONF_MAX_RUNTIME_MINUTES,
+                        default=self._pending.get(
+                            CONF_MAX_RUNTIME_MINUTES,
+                            DEFAULT_MAX_RUNTIME_MINUTES,
+                        ),
+                    ): _max_runtime_field(),
+                }
+            ),
+        )
+
+    # ---- Save & close -------------------------------------------------
+
+    async def async_step_save(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Persist `_pending` onto the config entry and close the flow."""
+        new_data = {**self._config_entry.data, **self._pending}
+        # Preserve the original program name – the user cannot rename it here.
+        new_data[CONF_NAME] = self._config_entry.data.get(
+            CONF_NAME, new_data.get(CONF_NAME, "Irrigation")
+        )
+        self.hass.config_entries.async_update_entry(
+            self._config_entry, data=new_data
+        )
+        return self.async_create_entry(data={})
+
+
+def _new_zone_id() -> str:
+    """Return a short stable id for a zone."""
+    return f"z_{secrets.token_hex(4)}"

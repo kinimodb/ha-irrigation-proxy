@@ -27,22 +27,20 @@ from .zone import Zone
 
 if TYPE_CHECKING:
     from .scheduler import ProgramScheduler
-    from .weather import WeatherProvider
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Central coordinator that polls valve states, weather, and safety checks."""
+    """Central coordinator that polls valve states and sequencer progress."""
 
     def __init__(
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        zones: dict[str, Zone],
+        zones: list[Zone],
         safety: SafetyManager,
         sequencer: Sequencer,
-        weather: WeatherProvider | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -51,39 +49,41 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             update_interval=timedelta(seconds=DEFAULT_UPDATE_INTERVAL_SECONDS),
         )
         self.entry = entry
-        self.zones = zones
+        self.zones: list[Zone] = list(zones)
         self.safety = safety
         self.sequencer = sequencer
-        self.weather = weather
         self.scheduler: ProgramScheduler | None = None
 
         self._tick_unsub: Callable[[], None] | None = None
         self._state_change_unsub: Callable[[], None] | None = None
 
-    # -- Public lifecycle ------------------------------------------------
+    # -- Lookup helpers -------------------------------------------------
+
+    @property
+    def zones_by_valve(self) -> dict[str, Zone]:
+        return {z.valve_entity_id: z for z in self.zones}
+
+    # -- Public lifecycle -----------------------------------------------
 
     def set_scheduler(self, scheduler: ProgramScheduler) -> None:
-        """Attach a scheduler so sensors can surface next-start info."""
         self.scheduler = scheduler
 
     def start_state_tracking(self) -> None:
-        """Subscribe to underlying valve state changes.
-
-        Ensures zone switch entities update within ~1 s when the real
-        valve flips, instead of waiting for the 30 s coordinator cycle.
-        """
+        """Subscribe to underlying valve state changes."""
         if self._state_change_unsub is not None:
             return
         if not self.zones:
             return
+        tracked = [z.valve_entity_id for z in self.zones]
+        if self.sequencer.master_valve:
+            tracked.append(self.sequencer.master_valve)
         self._state_change_unsub = async_track_state_change_event(
             self.hass,
-            list(self.zones.keys()),
+            tracked,
             self._on_valve_state_change,
         )
 
     def stop_state_tracking(self) -> None:
-        """Cancel the state-change subscription (on unload)."""
         if self._state_change_unsub is not None:
             try:
                 self._state_change_unsub()
@@ -97,11 +97,15 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Push valve state changes into coordinator data immediately."""
         valve_id = event.data.get("entity_id")
         new_state = event.data.get("new_state")
-        if valve_id not in self.zones:
+        state_str = new_state.state if new_state is not None else "unavailable"
+
+        zones_by_valve = self.zones_by_valve
+        if valve_id not in zones_by_valve:
+            # Likely the master valve – just trigger a refresh snapshot.
+            self._refresh_timer_snapshot()
             return
 
-        zone = self.zones[valve_id]
-        state_str = new_state.state if new_state is not None else "unavailable"
+        zone = zones_by_valve[valve_id]
         zone.update_state(state_str)
 
         data = dict(self.data or {})
@@ -120,19 +124,13 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data[valve_id] = entry
         self.async_set_updated_data(data)
 
-    # -- 1 Hz tick while running -----------------------------------------
+    # -- 1 Hz tick while running ----------------------------------------
 
     def notify_sequencer_state_changed(self) -> None:
-        """Call whenever the sequencer transitions idle ↔ running.
-
-        Starts/stops a 1 Hz ticker that refreshes the timer sensors
-        without polling any external system.
-        """
         if self.sequencer.state == SequencerState.RUNNING:
             self._start_tick()
         else:
             self._stop_tick()
-            # One final refresh so sensors flip cleanly to idle values
             self._refresh_timer_snapshot()
 
     def _start_tick(self) -> None:
@@ -154,7 +152,6 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @callback
     def _on_tick(self, _now: datetime) -> None:
-        """Fire every 1 s while the sequencer is running – cheap in-memory."""
         if self.sequencer.state != SequencerState.RUNNING:
             self._stop_tick()
             self._refresh_timer_snapshot()
@@ -162,14 +159,13 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._refresh_timer_snapshot()
 
     def _refresh_timer_snapshot(self) -> None:
-        """Rebuild just the sequencer / per-zone snapshots and push."""
         if self.data is None:
             return
         data = dict(self.data)
         data["sequencer"] = self.sequencer.progress
 
-        # Keep per-zone dicts in sync for the duration_minutes value – no IO.
-        for valve_id, zone in self.zones.items():
+        for zone in self.zones:
+            valve_id = zone.valve_entity_id
             entry = dict(data.get(valve_id, {}))
             entry.setdefault("name", zone.name)
             entry.setdefault("valve_entity_id", valve_id)
@@ -182,13 +178,14 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self.async_set_updated_data(data)
 
-    # -- Regular 30 s poll ----------------------------------------------
+    # -- Regular 30 s poll ---------------------------------------------
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Poll valve states, weather, run safety checks, return status dict."""
+        """Poll valve states, run safety checks, return status dict."""
         data: dict[str, Any] = {}
 
-        for valve_id, zone in self.zones.items():
+        for zone in self.zones:
+            valve_id = zone.valve_entity_id
             state = self.hass.states.get(valve_id)
             if state is not None:
                 zone.update_state(state.state)
@@ -197,7 +194,7 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Coordinator: entity %s unavailable during poll", valve_id
                 )
 
-            # Orphan detection: zone is on but has no deadman timer
+            # Orphan detection
             if (
                 zone.is_on
                 and valve_id not in self.safety.zone_start_times
@@ -218,13 +215,10 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "duration_minutes": zone.duration_minutes,
             }
 
-        # Backup safety check for overruns
-        await self.safety.check_overruns(list(self.zones.values()))
+        await self.safety.check_overruns(self.zones)
 
-        # Sequencer progress snapshot
         data["sequencer"] = self.sequencer.progress
 
-        # Scheduler snapshot (next start, last skip reason, etc.)
         if self.scheduler is not None:
             next_fire = self.scheduler.next_fire_time
             data["scheduler"] = {
@@ -234,37 +228,10 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     if self.scheduler.last_fire
                     else None
                 ),
-                "last_multiplier": self.scheduler.last_multiplier,
-                "last_skip_reason": self.scheduler.last_skip_reason,
             }
         else:
-            data["scheduler"] = {
-                "next_fire": None,
-                "last_fire": None,
-                "last_multiplier": 1.0,
-                "last_skip_reason": None,
-            }
+            data["scheduler"] = {"next_fire": None, "last_fire": None}
 
-        # Weather data (rate-limited internally, safe to call every poll)
-        if self.weather is not None:
-            weather_data = await self.weather.async_update()
-            data["weather"] = {
-                "et0_today": weather_data.et0_today,
-                "precipitation_last_24h": weather_data.precipitation_last_24h,
-                "precipitation_forecast_24h": weather_data.precipitation_forecast_24h,
-                "temperature_max": weather_data.temperature_max,
-                "water_need_factor": weather_data.water_need_factor,
-                "rain_skip": weather_data.rain_skip,
-                "rain_threshold_mm": self.weather.rain_threshold_mm,
-                "last_update": (
-                    weather_data.last_update.isoformat()
-                    if weather_data.last_update
-                    else None
-                ),
-                "last_error": weather_data.last_error,
-            }
-
-        # Keep the 1 Hz ticker in sync with sequencer state
         if self.sequencer.state == SequencerState.RUNNING:
             self._start_tick()
         else:

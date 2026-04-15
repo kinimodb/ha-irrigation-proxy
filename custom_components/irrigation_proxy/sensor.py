@@ -1,4 +1,4 @@
-"""Sensor entities for irrigation program visibility and weather data."""
+"""Sensor entities for irrigation program visibility."""
 
 from __future__ import annotations
 
@@ -35,18 +35,10 @@ async def async_setup_entry(
         NextStartSensor(coordinator, entry),
     ]
 
-    # One duration sensor per configured zone
     entities.extend(
-        ZoneDurationSensor(coordinator, entry, valve_id)
-        for valve_id in coordinator.zones
+        ZoneDurationSensor(coordinator, entry, zone.valve_entity_id)
+        for zone in coordinator.zones
     )
-
-    # Weather sensors (only if weather provider is configured)
-    if coordinator.weather is not None:
-        entities.extend([
-            EvapotranspirationSensor(coordinator, entry),
-            WaterNeedFactorSensor(coordinator, entry),
-        ])
 
     async_add_entities(entities)
 
@@ -66,7 +58,6 @@ class _BaseSensor(CoordinatorEntity[IrrigationCoordinator], SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Group all sensors under the same device as the switches."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
             name=self._entry.data.get(CONF_NAME, "Irrigation"),
@@ -75,13 +66,11 @@ class _BaseSensor(CoordinatorEntity[IrrigationCoordinator], SensorEntity):
         )
 
     def _seq_data(self) -> dict[str, Any]:
-        """Helper to read sequencer data from coordinator."""
         if self.coordinator.data is None:
             return {}
         return self.coordinator.data.get("sequencer", {})
 
     def _sched_data(self) -> dict[str, Any]:
-        """Helper to read scheduler data from coordinator."""
         if self.coordinator.data is None:
             return {}
         return self.coordinator.data.get("scheduler", {}) or {}
@@ -118,7 +107,7 @@ class ProgramStatusSensor(_BaseSensor):
 
 
 class CurrentZoneSensor(_BaseSensor):
-    """Shows the name of the currently active zone."""
+    """Name of the currently active zone."""
 
     _attr_icon = "mdi:water"
     _attr_translation_key = "current_zone"
@@ -146,7 +135,7 @@ class CurrentZoneSensor(_BaseSensor):
 
 
 class ZoneTimeRemainingSensor(_BaseSensor):
-    """Seconds left on the current zone; idle fallback shows the next zone's duration."""
+    """Seconds left on the current zone; idle fallback = first zone's duration."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
@@ -168,8 +157,6 @@ class ZoneTimeRemainingSensor(_BaseSensor):
         if seq.get("state") == "running":
             return seq.get("remaining_zone_seconds")
 
-        # Idle fallback – surface the first configured zone's planned duration
-        # so the UI never says "unknown".
         zones = seq.get("zones") or []
         if zones:
             return int(zones[0].get("duration_seconds") or 0)
@@ -202,7 +189,8 @@ class ProgramTotalRemainingSensor(_BaseSensor):
         seq = self._seq_data()
         return {
             "inter_zone_delay_seconds": seq.get("pause_seconds"),
-            "duration_multiplier": seq.get("duration_multiplier"),
+            "depressurize_seconds": seq.get("depressurize_seconds"),
+            "master_valve": seq.get("master_valve"),
         }
 
 
@@ -235,15 +223,11 @@ class NextStartSensor(_BaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         sched = self._sched_data()
-        return {
-            "last_fire": sched.get("last_fire"),
-            "last_skip_reason": sched.get("last_skip_reason"),
-            "last_multiplier": sched.get("last_multiplier"),
-        }
+        return {"last_fire": sched.get("last_fire")}
 
 
 class ZoneDurationSensor(_BaseSensor):
-    """Per-zone configured duration in seconds (always populated)."""
+    """Per-zone configured duration in seconds."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
@@ -258,7 +242,7 @@ class ZoneDurationSensor(_BaseSensor):
     ) -> None:
         super().__init__(coordinator, entry)
         self._valve_entity_id = valve_entity_id
-        zone = coordinator.zones[valve_entity_id]
+        zone = coordinator.zones_by_valve[valve_entity_id]
         self._attr_unique_id = (
             f"{entry.entry_id}_{valve_entity_id}_duration"
         )
@@ -266,104 +250,17 @@ class ZoneDurationSensor(_BaseSensor):
 
     @property
     def native_value(self) -> int:
-        zone = self.coordinator.zones.get(self._valve_entity_id)
+        zone = self.coordinator.zones_by_valve.get(self._valve_entity_id)
         if zone is None:
             return 0
         return zone.duration_seconds
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        zone = self.coordinator.zones.get(self._valve_entity_id)
+        zone = self.coordinator.zones_by_valve.get(self._valve_entity_id)
         if zone is None:
             return {}
         return {
             "duration_minutes": zone.duration_minutes,
             "valve_entity_id": self._valve_entity_id,
-        }
-
-
-# -- Weather sensors --------------------------------------------------------
-
-
-class _WeatherSensor(_BaseSensor):
-    """Base class for weather-related sensors."""
-
-    def _weather_data(self) -> dict[str, Any]:
-        """Helper to read weather data from coordinator."""
-        if self.coordinator.data is None:
-            return {}
-        return self.coordinator.data.get("weather", {})
-
-
-class EvapotranspirationSensor(_WeatherSensor):
-    """Shows today's reference evapotranspiration (ET₀) in mm."""
-
-    _attr_icon = "mdi:water-thermometer"
-    _attr_native_unit_of_measurement = "mm"
-    _attr_translation_key = "evapotranspiration"
-
-    def __init__(
-        self,
-        coordinator: IrrigationCoordinator,
-        entry: ConfigEntry,
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_evapotranspiration"
-        self._attr_name = "Evapotranspiration"
-
-    @property
-    def native_value(self) -> float | None:
-        et0 = self._weather_data().get("et0_today")
-        if et0 is None:
-            return None
-        return round(et0, 1)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        w = self._weather_data()
-        attrs: dict[str, Any] = {}
-        if "temperature_max" in w:
-            attrs["temperature_max"] = w["temperature_max"]
-        if "last_update" in w:
-            attrs["weather_last_update"] = w["last_update"]
-        if w.get("last_error"):
-            attrs["weather_error"] = w["last_error"]
-        return attrs
-
-
-class WaterNeedFactorSensor(_WeatherSensor):
-    """Shows the current irrigation adjustment factor (0.0 – 2.0).
-
-    Factor > 1.0 = hotter/drier than normal → water more
-    Factor < 1.0 = cooler/wetter than normal → water less
-    Factor = 0.0 = rain skip active → no watering needed
-    """
-
-    _attr_icon = "mdi:water-percent"
-    _attr_native_unit_of_measurement = "x"
-    _attr_translation_key = "water_need_factor"
-
-    def __init__(
-        self,
-        coordinator: IrrigationCoordinator,
-        entry: ConfigEntry,
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._attr_unique_id = f"{entry.entry_id}_water_need_factor"
-        self._attr_name = "Water Need Factor"
-
-    @property
-    def native_value(self) -> float | None:
-        factor = self._weather_data().get("water_need_factor")
-        if factor is None:
-            return None
-        return round(factor, 2)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        w = self._weather_data()
-        return {
-            "precipitation_last_24h": w.get("precipitation_last_24h", 0.0),
-            "precipitation_forecast_24h": w.get("precipitation_forecast_24h", 0.0),
-            "rain_skip": w.get("rain_skip", False),
         }

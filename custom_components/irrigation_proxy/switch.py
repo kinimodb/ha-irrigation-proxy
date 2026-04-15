@@ -26,12 +26,10 @@ async def async_setup_entry(
     """Set up switch entities from a config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[SwitchEntity] = [
-        ProgramSwitch(coordinator, entry),
-    ]
+    entities: list[SwitchEntity] = [ProgramSwitch(coordinator, entry)]
     entities.extend(
-        ZoneSwitch(coordinator, entry, valve_id)
-        for valve_id in coordinator.zones
+        ZoneSwitch(coordinator, entry, zone.valve_entity_id)
+        for zone in coordinator.zones
     )
     async_add_entities(entities)
 
@@ -83,10 +81,10 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
             "remaining_zone_seconds": seq.get("remaining_zone_seconds"),
             "total_remaining_seconds": seq.get("total_remaining_seconds"),
             "inter_zone_delay_seconds": seq.get("pause_seconds"),
-            "duration_multiplier": seq.get("duration_multiplier"),
+            "depressurize_seconds": seq.get("depressurize_seconds"),
+            "master_valve": seq.get("master_valve"),
             "zones": seq.get("zones", []),
             "next_scheduled_start": sched.get("next_fire"),
-            "last_skip_reason": sched.get("last_skip_reason"),
         }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -102,7 +100,6 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         await self.coordinator.async_request_refresh()
 
     async def async_will_remove_from_hass(self) -> None:
-        """Stop program when entity is removed."""
         if self.is_on:
             _LOGGER.info("Program switch removed while running – stopping program")
             await self.coordinator.sequencer.stop()
@@ -121,18 +118,16 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         entry: ConfigEntry,
         valve_entity_id: str,
     ) -> None:
-        """Initialize the zone switch."""
         super().__init__(coordinator)
         self._entry = entry
         self._valve_entity_id = valve_entity_id
-        self._zone = coordinator.zones[valve_entity_id]
+        self._zone = coordinator.zones_by_valve[valve_entity_id]
 
         self._attr_unique_id = f"{entry.entry_id}_{valve_entity_id}"
         self._attr_name = self._zone.name
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Group all zone switches under one device per config entry."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
             name=self._entry.data.get(CONF_NAME, "Irrigation"),
@@ -142,13 +137,7 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return whether the zone valve is currently on.
-
-        Reads first from the live HA state of the underlying valve (pushed
-        by the coordinator's state_change listener within ~1 s) and falls
-        back to the cached coordinator snapshot.
-        """
-        # Live underlying state – reflects reality immediately once HA sees it.
+        """Return whether the zone valve is currently on."""
         ha_state = self.hass.states.get(self._valve_entity_id) if self.hass else None
         if ha_state is not None and ha_state.state in ("on", "off"):
             return ha_state.state == "on"
@@ -162,10 +151,7 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose debugging attributes."""
-        attrs: dict[str, Any] = {
-            "valve_entity_id": self._valve_entity_id,
-        }
+        attrs: dict[str, Any] = {"valve_entity_id": self._valve_entity_id}
         if self.coordinator.data is not None:
             zone_data = self.coordinator.data.get(self._valve_entity_id, {})
             attrs["state_mismatch"] = zone_data.get("state_mismatch", False)
@@ -191,7 +177,6 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         await self.coordinator.async_request_refresh()
 
     async def async_will_remove_from_hass(self) -> None:
-        """Close valve when entity is removed."""
         if self._zone.is_on:
             _LOGGER.info(
                 "Zone '%s' removed while on – closing valve", self._zone.name

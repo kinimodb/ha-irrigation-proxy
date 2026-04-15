@@ -4,6 +4,46 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.5.0 — 2026-04-15
+
+### Added
+- Add optional **master / pump valve** on the main supply line. Per zone
+  the sequencer now opens the zone valve first, then the master, waits
+  the configured duration, closes the master, waits a short
+  depressurize delay and finally closes the zone – so no pressure rests
+  on the lines between zones.
+- Add configurable **depressurize delay** (seconds after closing the
+  master before the zone valve is closed).
+- Add a menu-based **options flow** (Irrigation v5 style): a single menu
+  with Basics / Zones / Advanced / Save & Close, zones can be added,
+  edited and removed individually.
+
+### Changed
+- Zones are now stored as an ordered list of `{id, name, valve_entity_id,
+  duration_minutes}` dicts. Each zone owns its name + runtime; the
+  previous `CONF_ZONE_DURATIONS` override map is gone.
+- The config flow only asks for a program name; everything else is set
+  up via the options menu afterwards.
+- Scheduler simplified to schedule-enabled + start times + weekdays. No
+  rain handling, no duration scaling.
+
+### Removed
+- Remove the Open-Meteo weather provider, the `Evapotranspiration`,
+  `Water Need Factor` and `Rain Skip` entities, and the `rain_adjust_mode`
+  option. These will come back in a future weather-aware release.
+- Remove the `duration_multiplier` argument from `Sequencer.start()`.
+
+### Safety
+- Master valve closes BEFORE the zone valve on both normal completion
+  and `stop()`/error paths, so zone hoses are drained before their valve
+  shuts. Emergency shutdown on startup / HA stop also force-closes the
+  master valve in addition to all zone valves.
+
+**BREAKING:** The config-entry schema changed. Existing entries from
+v0.4.x lose their weather/rain settings and their per-zone duration
+overrides; zones need to be re-added via the new Zones menu. Delete and
+re-add the integration if migration issues appear.
+
 ## v0.4.0 — 2026-04-14
 
 ### Added
