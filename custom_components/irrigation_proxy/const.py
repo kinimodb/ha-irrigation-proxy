@@ -4,32 +4,37 @@ from typing import Final
 
 DOMAIN: Final = "irrigation_proxy"
 
-# Config keys
-CONF_NAME: Final = "name"
-CONF_ZONES: Final = "zones"
-CONF_DURATION_MINUTES: Final = "duration_minutes"
-CONF_MAX_RUNTIME_MINUTES: Final = "max_runtime_minutes"
-CONF_RAIN_THRESHOLD_MM: Final = "rain_threshold_mm"
+# -- Config keys -----------------------------------------------------------
 
-# Schedule / v0.4.0 config keys
+CONF_NAME: Final = "name"
+
+# Zones: list of dicts with keys id, name, valve_entity_id, duration_minutes.
+# Order of this list = sequence order.
+CONF_ZONES: Final = "zones"
+CONF_ZONE_ID: Final = "id"
+CONF_ZONE_NAME: Final = "name"
+CONF_ZONE_VALVE: Final = "valve_entity_id"
+CONF_ZONE_DURATION_MINUTES: Final = "duration_minutes"
+
+# Optional master / pump valve that sits on the main supply line.
+# When configured: opens after the zone valve, closes before the zone valve,
+# letting pressure drain between zones.
+CONF_MASTER_VALVE: Final = "master_valve_entity_id"
+CONF_DEPRESSURIZE_SECONDS: Final = "depressurize_seconds"
+
+# Schedule
 CONF_SCHEDULE_ENABLED: Final = "schedule_enabled"
 CONF_SCHEDULE_START_TIMES: Final = "schedule_start_times"
 CONF_SCHEDULE_WEEKDAYS: Final = "schedule_weekdays"
+
+# Timing
 CONF_INTER_ZONE_DELAY_SECONDS: Final = "inter_zone_delay_seconds"
-CONF_ZONE_DURATIONS: Final = "zone_durations"  # dict[entity_id, minutes]
-CONF_RAIN_ADJUST_MODE: Final = "rain_adjust_mode"
 
-# Rain adjust modes
-RAIN_ADJUST_OFF: Final = "off"
-RAIN_ADJUST_HARD: Final = "hard"
-RAIN_ADJUST_SCALE: Final = "scale"
-RAIN_ADJUST_MODES: Final[tuple[str, ...]] = (
-    RAIN_ADJUST_OFF,
-    RAIN_ADJUST_HARD,
-    RAIN_ADJUST_SCALE,
-)
+# Safety
+CONF_MAX_RUNTIME_MINUTES: Final = "max_runtime_minutes"
 
-# Weekday identifiers (Mon..Sun, matches datetime.weekday() order)
+# -- Weekdays --------------------------------------------------------------
+
 WEEKDAYS: Final[tuple[str, ...]] = (
     "mon",
     "tue",
@@ -40,34 +45,27 @@ WEEKDAYS: Final[tuple[str, ...]] = (
     "sun",
 )
 
-# Defaults
-DEFAULT_MAX_RUNTIME_MINUTES: Final = 60
+# -- Defaults --------------------------------------------------------------
+
 DEFAULT_DURATION_MINUTES: Final = 15
+DEFAULT_MAX_RUNTIME_MINUTES: Final = 60
+DEFAULT_INTER_ZONE_DELAY_SECONDS: Final = 30
+DEFAULT_DEPRESSURIZE_SECONDS: Final = 5
+DEFAULT_SCHEDULE_ENABLED: Final = False
+
 DEFAULT_UPDATE_INTERVAL_SECONDS: Final = 30
 DEFAULT_STATE_VERIFY_DELAY_SECONDS: Final = 5
 DEFAULT_CLOSE_RETRY_MAX: Final = 3
 DEFAULT_SAFETY_MARGIN_SECONDS: Final = 30
-DEFAULT_PAUSE_BETWEEN_ZONES_SECONDS: Final = 30
-DEFAULT_SCHEDULE_ENABLED: Final = False
-DEFAULT_RAIN_ADJUST_MODE: Final = RAIN_ADJUST_OFF
 
-# Live-UI tick interval while the sequencer is running (seconds)
+# Live-UI tick interval while the sequencer is running (seconds).
 TIMER_TICK_INTERVAL_SECONDS: Final = 1
 
-# Weather defaults
-DEFAULT_RAIN_THRESHOLD_MM: Final = 5.0
-DEFAULT_REFERENCE_ET0_MM: Final = 5.0
-WEATHER_UPDATE_INTERVAL_MINUTES: Final = 30
-OPEN_METEO_BASE_URL: Final = "https://api.open-meteo.com/v1/forecast"
+# -- Service names ---------------------------------------------------------
 
-# Coarse conversion from watering time to mm irrigation depth.
-# Tunable later once real flow/area data is available; used only by the
-# optional "scale" rain-adjust mode to decide skip vs. shorten.
-ASSUMED_FLOW_MM_PER_MIN: Final = 0.25
-
-# Service names
 SERVICE_START_PROGRAM: Final = "start_program"
 SERVICE_STOP_PROGRAM: Final = "stop_program"
 
-# Platforms
-PLATFORMS: Final[list[str]] = ["switch", "sensor", "binary_sensor"]
+# -- Platforms -------------------------------------------------------------
+
+PLATFORMS: Final[list[str]] = ["switch", "sensor"]

@@ -26,10 +26,12 @@ class Zone:
         name: str,
         valve_entity_id: str,
         duration_minutes: int,
+        zone_id: str | None = None,
     ) -> None:
         self.name = name
         self.valve_entity_id = valve_entity_id
         self.duration_minutes = duration_minutes
+        self.zone_id = zone_id
 
         self.is_on: bool = False
         self.expected_state: bool = False
