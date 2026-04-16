@@ -4,6 +4,24 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.1 — 2026-04-16
+
+### Fixed
+- Fix zone valve selection in the options flow: the `EntitySelector` previously
+  used `domain=["switch", "valve"]` (a list), which HA versions before 2022.9
+  do not support. The domain restriction is now removed entirely so the picker
+  accepts any entity type (`switch.*`, `valve.*`, or anything else) on all HA
+  versions. Sonoff SWV via Zigbee2MQTT (`switch.sonoff_swv_*`) is unaffected.
+- Fix zone name field rendered as `vol.Required` with an empty default; it is
+  now `vol.Optional`, reflecting that the zone name is truly optional and
+  preventing edge-case form-validation issues in certain HA versions.
+- Add `DEBUG` log lines to `zone_add` and `zone_edit` step handlers so that
+  the exact `user_input` arriving at the back-end is visible in HA logs when
+  `custom_components.irrigation_proxy: debug` logging is enabled.
+
+### Safety
+- No valve-path changes in this release.
+
 ## v0.6.0 — 2026-04-16
 
 ### Added

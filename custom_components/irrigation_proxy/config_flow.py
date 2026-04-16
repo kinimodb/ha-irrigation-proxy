@@ -19,6 +19,7 @@ config entry when the user picks "Save & Close".
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any
 
@@ -51,6 +52,8 @@ from .const import (
 )
 from .migration import migrate_v1_zones
 from .scheduler import format_start_times, parse_start_times
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # -- Selector helpers ------------------------------------------------------
@@ -116,9 +119,12 @@ def _weekday_field() -> Any:
 
 
 def _switch_entity_field() -> Any:
-    return selector.EntitySelector(
-        selector.EntitySelectorConfig(domain=["switch", "valve"], multiple=False)
-    )
+    # No domain filter: accepts switch.*, valve.*, or any other entity type.
+    # Restricting to domain=["switch","valve"] breaks on HA versions that don't
+    # support a list for the domain field (pre-2022.9). Z2M exposes Sonoff SWV
+    # as switch.* entities; ZHA and native valve platform use valve.* – omitting
+    # the filter keeps all setups working without HA-version gating.
+    return selector.EntitySelector(selector.EntitySelectorConfig(multiple=False))
 
 
 def _validate_start_times(raw: str | list[str] | None) -> list[str]:
@@ -297,13 +303,17 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            _LOGGER.debug("zone_add user_input received: %s", user_input)
             valve = user_input.get(CONF_ZONE_VALVE)
             if not valve:
+                _LOGGER.debug(
+                    "zone_add: valve_entity_id missing or empty in user_input"
+                )
                 errors[CONF_ZONE_VALVE] = "valve_required"
             else:
                 new_zone = {
                     CONF_ZONE_ID: _new_zone_id(),
-                    CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME, valve),
+                    CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME) or valve,
                     CONF_ZONE_VALVE: valve,
                     CONF_ZONE_DURATION_MINUTES: int(
                         user_input.get(
@@ -312,6 +322,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                         )
                     ),
                 }
+                _LOGGER.debug("zone_add: created zone %s", new_zone)
                 zones = list(self._pending.get(CONF_ZONES) or [])
                 zones.append(new_zone)
                 self._pending[CONF_ZONES] = zones
@@ -321,7 +332,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
             step_id="zone_add",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_ZONE_NAME, default=""): str,
+                    vol.Optional(CONF_ZONE_NAME, default=""): str,
                     vol.Required(CONF_ZONE_VALVE): _switch_entity_field(),
                     vol.Required(
                         CONF_ZONE_DURATION_MINUTES,
@@ -352,6 +363,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            _LOGGER.debug("zone_edit user_input received: %s", user_input)
             if user_input.get("delete"):
                 zones.pop(idx)
                 self._pending[CONF_ZONES] = zones
@@ -360,11 +372,14 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
 
             valve = user_input.get(CONF_ZONE_VALVE)
             if not valve:
+                _LOGGER.debug(
+                    "zone_edit: valve_entity_id missing or empty in user_input"
+                )
                 errors[CONF_ZONE_VALVE] = "valve_required"
             else:
                 zones[idx] = {
                     CONF_ZONE_ID: zone_id,
-                    CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME, valve),
+                    CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME) or valve,
                     CONF_ZONE_VALVE: valve,
                     CONF_ZONE_DURATION_MINUTES: int(
                         user_input.get(
@@ -381,7 +396,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
             step_id="zone_edit",
             data_schema=vol.Schema(
                 {
-                    vol.Required(
+                    vol.Optional(
                         CONF_ZONE_NAME,
                         default=zone.get(CONF_ZONE_NAME, ""),
                     ): str,

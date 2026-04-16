@@ -71,8 +71,25 @@ if not _HA_AVAILABLE:
     # --- homeassistant.config_entries ---
     ha_config_entries = _make_module("homeassistant.config_entries")
     ha_config_entries.ConfigEntry = MagicMock  # type: ignore[attr-defined]
-    ha_config_entries.ConfigFlow = type("ConfigFlow", (), {"VERSION": 1})  # type: ignore[attr-defined]
-    ha_config_entries.OptionsFlow = type("OptionsFlow", (), {})  # type: ignore[attr-defined]
+
+    # ConfigFlow uses `class MyFlow(ConfigFlow, domain="foo")` syntax which
+    # requires __init_subclass__ to accept keyword arguments.
+    class _StubConfigFlow:
+        VERSION = 1
+
+        def __init_subclass__(cls, domain: str = "", **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+
+    ha_config_entries.ConfigFlow = _StubConfigFlow  # type: ignore[attr-defined]
+
+    # OptionsFlow needs async_show_form / async_show_menu / async_create_entry
+    # so that flow step handlers can call them.  These are no-ops here; tests
+    # that need real return values should override them on the instance.
+    class _StubOptionsFlow:
+        def __init_subclass__(cls, **kwargs: object) -> None:
+            super().__init_subclass__(**kwargs)
+
+    ha_config_entries.OptionsFlow = _StubOptionsFlow  # type: ignore[attr-defined]
 
     # --- homeassistant.helpers ---
     _make_module("homeassistant.helpers")
@@ -118,16 +135,32 @@ if not _HA_AVAILABLE:
 
     # --- homeassistant.helpers.selector ---
     ha_selector = _make_module("homeassistant.helpers.selector")
-    ha_selector.EntitySelector = MagicMock  # type: ignore[attr-defined]
-    ha_selector.EntitySelectorConfig = MagicMock  # type: ignore[attr-defined]
-    ha_selector.NumberSelector = MagicMock  # type: ignore[attr-defined]
-    ha_selector.NumberSelectorConfig = MagicMock  # type: ignore[attr-defined]
-    ha_selector.NumberSelectorMode = MagicMock  # type: ignore[attr-defined]
-    ha_selector.SelectSelector = MagicMock  # type: ignore[attr-defined]
-    ha_selector.SelectSelectorConfig = MagicMock  # type: ignore[attr-defined]
-    ha_selector.SelectSelectorMode = MagicMock  # type: ignore[attr-defined]
-    ha_selector.BooleanSelector = MagicMock  # type: ignore[attr-defined]
-    ha_selector.TextSelector = MagicMock  # type: ignore[attr-defined]
+
+    # Selector *Config classes just store their kwargs as a plain dict so that
+    # nesting them inside the Selector class works without mock-spec conflicts.
+    class _SelectorConfig:
+        def __new__(cls, **kwargs: object) -> dict:  # type: ignore[misc]
+            return kwargs
+
+    # Selector classes accept a config dict and are callable no-ops (they just
+    # return the value unchanged). voluptuous uses them as validators.
+    class _Selector:
+        def __init__(self, config: dict | None = None) -> None:
+            self._config = config or {}
+
+        def __call__(self, value: object) -> object:
+            return value
+
+    ha_selector.EntitySelector = _Selector  # type: ignore[attr-defined]
+    ha_selector.EntitySelectorConfig = _SelectorConfig  # type: ignore[attr-defined]
+    ha_selector.NumberSelector = _Selector  # type: ignore[attr-defined]
+    ha_selector.NumberSelectorConfig = _SelectorConfig  # type: ignore[attr-defined]
+    ha_selector.NumberSelectorMode = MagicMock()  # type: ignore[attr-defined]
+    ha_selector.SelectSelector = _Selector  # type: ignore[attr-defined]
+    ha_selector.SelectSelectorConfig = _SelectorConfig  # type: ignore[attr-defined]
+    ha_selector.SelectSelectorMode = MagicMock()  # type: ignore[attr-defined]
+    ha_selector.BooleanSelector = _Selector  # type: ignore[attr-defined]
+    ha_selector.TextSelector = _Selector  # type: ignore[attr-defined]
 
     # --- homeassistant.components ---
     _make_module("homeassistant.components")

@@ -1,7 +1,7 @@
 {
   "domain": "irrigation_proxy",
   "name": "Irrigation Proxy",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "config_flow": true,
   "iot_class": "local_polling",
   "documentation": "https://github.com/kinimodb/ha-irrigation-proxy",
