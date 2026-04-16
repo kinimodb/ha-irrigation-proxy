@@ -4,6 +4,26 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.0 — 2026-04-16
+
+### Added
+- Add `Zone Duration`, `Inter-Zone Delay`, and `Max Runtime` as adjustable
+  **number entities** on the dashboard (in-memory; config entry remains the
+  persistent source).
+- Fire HA bus events for the full program/zone lifecycle:
+  `irrigation_proxy_program_started`, `_program_completed`, `_program_aborted`,
+  `_zone_started`, `_zone_completed`, `_zone_error`.
+
+### Fixed
+- Fix zone valve selection in the options flow: the entity picker now includes
+  both `switch` and `valve` domains, so Sonoff SWV and other modern Zigbee
+  valves that register as `valve` entities can be selected.
+- Fix all valve service calls to use the correct HA service domain:
+  `switch.turn_on/turn_off` for switch entities,
+  `valve.open_valve/close_valve` for valve entities.
+- Fix state detection for valve entities: the "open" state is now recognised as
+  "on" everywhere (coordinator, safety, zone model, switch entity).
+
 ## v0.5.1 — 2026-04-16
 
 ### Fixed

@@ -117,7 +117,7 @@ def _weekday_field() -> Any:
 
 def _switch_entity_field() -> Any:
     return selector.EntitySelector(
-        selector.EntitySelectorConfig(domain="switch", multiple=False)
+        selector.EntitySelectorConfig(domain=["switch", "valve"], multiple=False)
     )
 
 

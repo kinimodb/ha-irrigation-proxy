@@ -139,8 +139,8 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
     def is_on(self) -> bool | None:
         """Return whether the zone valve is currently on."""
         ha_state = self.hass.states.get(self._valve_entity_id) if self.hass else None
-        if ha_state is not None and ha_state.state in ("on", "off"):
-            return ha_state.state == "on"
+        if ha_state is not None and ha_state.state in ("on", "off", "open", "closed"):
+            return ha_state.state in ("on", "open")
 
         if self.coordinator.data is None:
             return None
