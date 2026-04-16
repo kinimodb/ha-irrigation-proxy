@@ -4,6 +4,18 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.2 — 2026-04-16
+
+### Fixed
+- Fix HACS download failure ("No manifest.json file found
+  'custom_components/None/manifest.json'"): add the required `codeowners` and
+  `requirements` fields to `manifest.json`. HACS v2 requires both fields during
+  repository indexing; without them HACS leaves `domain = None` internally and
+  every subsequent install attempt fails with the above error.
+- Lower `homeassistant` minimum version in `hacs.json` from `2024.1.0` to
+  `2022.9.0`. The previous setting blocked installation for users on HA < 2024.1
+  before the manifest was ever read, also leaving `domain = None`.
+
 ## v0.6.1 — 2026-04-16
 
 ### Fixed
