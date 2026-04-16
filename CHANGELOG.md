@@ -4,6 +4,15 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.5.1 — 2026-04-16
+
+### Fixed
+- Fix crash on startup when loading config entries created under v0.4.x.
+  Old zone format (list of entity-ID strings) is now automatically
+  migrated to the v0.5.0 dict format via HA config entry migration.
+- Fix silent data corruption in the options flow when zones were still in
+  the old string format (`dict()` on a string produced a char-indexed dict).
+
 ## v0.5.0 — 2026-04-15
 
 ### Added
