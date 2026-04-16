@@ -35,6 +35,12 @@ from homeassistant.core import HomeAssistant
 from .const import (
     DEFAULT_CLOSE_RETRY_MAX,
     DEFAULT_STATE_VERIFY_DELAY_SECONDS,
+    EVENT_PROGRAM_ABORTED,
+    EVENT_PROGRAM_COMPLETED,
+    EVENT_PROGRAM_STARTED,
+    EVENT_ZONE_COMPLETED,
+    EVENT_ZONE_ERROR,
+    EVENT_ZONE_STARTED,
 )
 
 if TYPE_CHECKING:
@@ -211,6 +217,14 @@ class Sequencer:
             f" (master valve {self._master_valve})" if self._master_valve else "",
         )
         self._state = SequencerState.RUNNING
+        self._hass.bus.async_fire(
+            EVENT_PROGRAM_STARTED,
+            {
+                "total_zones": len(self._zones),
+                "zones": [z.name for z in self._zones],
+                "total_duration_seconds": self.total_program_seconds_idle,
+            },
+        )
         self._task = self._hass.async_create_task(
             self._run(), "irrigation_proxy_sequencer"
         )
@@ -223,6 +237,14 @@ class Sequencer:
         _LOGGER.info("Sequencer: stopping program")
 
         zone_to_close = self._current_zone
+        self._hass.bus.async_fire(
+            EVENT_PROGRAM_ABORTED,
+            {
+                "reason": "stopped",
+                "zone_name": zone_to_close.name if zone_to_close else None,
+                "zone_index": self._current_index,
+            },
+        )
 
         # Cancel the task
         if self._task is not None and not self._task.done():
@@ -271,10 +293,29 @@ class Sequencer:
                         "Sequencer: zone '%s' failed to open – skipping",
                         zone.name,
                     )
+                    self._hass.bus.async_fire(
+                        EVENT_ZONE_ERROR,
+                        {
+                            "zone_name": zone.name,
+                            "zone_index": i,
+                            "valve_entity_id": zone.valve_entity_id,
+                            "reason": "failed_to_open",
+                        },
+                    )
                     continue
 
                 # Deadman on the zone valve itself.
                 self._safety.start_deadman(zone)
+
+                self._hass.bus.async_fire(
+                    EVENT_ZONE_STARTED,
+                    {
+                        "zone_name": zone.name,
+                        "zone_index": i,
+                        "valve_entity_id": zone.valve_entity_id,
+                        "duration_seconds": zone.duration_seconds,
+                    },
+                )
 
                 # 2. Open master – water starts flowing.
                 master_opened = await self._open_master()
@@ -302,6 +343,14 @@ class Sequencer:
                 self._safety.cancel_deadman(zone.valve_entity_id)
 
                 _LOGGER.info("Sequencer: zone '%s' completed", zone.name)
+                self._hass.bus.async_fire(
+                    EVENT_ZONE_COMPLETED,
+                    {
+                        "zone_name": zone.name,
+                        "zone_index": i,
+                        "valve_entity_id": zone.valve_entity_id,
+                    },
+                )
 
                 # 7. Pause between zones (not after last)
                 if i < len(self._zones) - 1 and self._pause_seconds > 0:
@@ -314,6 +363,13 @@ class Sequencer:
                     await asyncio.sleep(self._pause_seconds)
 
             _LOGGER.info("Sequencer: program completed successfully")
+            self._hass.bus.async_fire(
+                EVENT_PROGRAM_COMPLETED,
+                {
+                    "zones_completed": len(self._zones),
+                    "total_zones": len(self._zones),
+                },
+            )
 
         except asyncio.CancelledError:
             _LOGGER.info("Sequencer: program was cancelled")
@@ -321,6 +377,16 @@ class Sequencer:
 
         except Exception:
             _LOGGER.exception("Sequencer: unexpected error during program")
+            self._hass.bus.async_fire(
+                EVENT_PROGRAM_ABORTED,
+                {
+                    "reason": "error",
+                    "zone_name": (
+                        self._current_zone.name if self._current_zone else None
+                    ),
+                    "zone_index": self._current_index,
+                },
+            )
             await self._close_master()
             if self._current_zone is not None:
                 try:

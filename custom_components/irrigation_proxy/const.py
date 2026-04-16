@@ -61,6 +61,15 @@ DEFAULT_SAFETY_MARGIN_SECONDS: Final = 30
 # Live-UI tick interval while the sequencer is running (seconds).
 TIMER_TICK_INTERVAL_SECONDS: Final = 1
 
+# -- Events ----------------------------------------------------------------
+
+EVENT_PROGRAM_STARTED: Final = f"{DOMAIN}_program_started"
+EVENT_PROGRAM_COMPLETED: Final = f"{DOMAIN}_program_completed"
+EVENT_PROGRAM_ABORTED: Final = f"{DOMAIN}_program_aborted"
+EVENT_ZONE_STARTED: Final = f"{DOMAIN}_zone_started"
+EVENT_ZONE_COMPLETED: Final = f"{DOMAIN}_zone_completed"
+EVENT_ZONE_ERROR: Final = f"{DOMAIN}_zone_error"
+
 # -- Service names ---------------------------------------------------------
 
 SERVICE_START_PROGRAM: Final = "start_program"
@@ -68,4 +77,4 @@ SERVICE_STOP_PROGRAM: Final = "stop_program"
 
 # -- Platforms -------------------------------------------------------------
 
-PLATFORMS: Final[list[str]] = ["switch", "sensor"]
+PLATFORMS: Final[list[str]] = ["switch", "sensor", "number"]
