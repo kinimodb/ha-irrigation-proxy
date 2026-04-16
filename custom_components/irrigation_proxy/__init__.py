@@ -34,6 +34,7 @@ from .const import (
     WEEKDAYS,
 )
 from .coordinator import IrrigationCoordinator
+from .migration import migrate_v1_zones
 from .safety import SafetyManager
 from .scheduler import ProgramScheduler, ScheduleConfig, parse_start_times
 from .sequencer import Sequencer
@@ -57,6 +58,7 @@ def _build_schedule_config(entry: ConfigEntry) -> ScheduleConfig:
 
 def _build_zones(raw: dict[str, Any]) -> list[Zone]:
     """Translate the CONF_ZONES list of dicts into Zone objects (in order)."""
+    raw = migrate_v1_zones(raw)  # defensive: handle un-migrated v0.4.x data
     zones_raw = raw.get(CONF_ZONES) or []
     zones: list[Zone] = []
     for entry in zones_raw:
@@ -82,6 +84,25 @@ def _build_zones(raw: dict[str, Any]) -> list[Zone]:
             )
         )
     return zones
+
+
+async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
+    """Migrate config entries from older versions."""
+    _LOGGER.info(
+        "Migrating Irrigation Proxy config entry from version %s",
+        config_entry.version,
+    )
+
+    if config_entry.version < 2:
+        new_data = migrate_v1_zones({**config_entry.data})
+        new_options = migrate_v1_zones({**config_entry.options})
+        config_entry.version = 2
+        hass.config_entries.async_update_entry(
+            config_entry, data=new_data, options=new_options
+        )
+        _LOGGER.info("Irrigation Proxy: migration to version 2 successful")
+
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

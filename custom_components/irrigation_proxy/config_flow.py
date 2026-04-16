@@ -49,6 +49,7 @@ from .const import (
     DOMAIN,
     WEEKDAYS,
 )
+from .migration import migrate_v1_zones
 from .scheduler import format_start_times, parse_start_times
 
 
@@ -149,7 +150,7 @@ def _default_entry_data(name: str) -> dict[str, Any]:
 class IrrigationProxyConfigFlow(ConfigFlow, domain=DOMAIN):
     """Create a new irrigation program (just ask for a name)."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -189,7 +190,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
     def __init__(self, config_entry: ConfigEntry) -> None:
         self._config_entry = config_entry
         # Deep-ish working copy; we only touch top-level keys + the zones list.
-        merged = {**config_entry.data, **config_entry.options}
+        merged = migrate_v1_zones({**config_entry.data, **config_entry.options})
         self._pending: dict[str, Any] = {
             **merged,
             CONF_ZONES: [
