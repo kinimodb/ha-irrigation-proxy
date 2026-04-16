@@ -124,6 +124,17 @@
       "zone_duration": {
         "name": "Zonen-Laufzeit"
       }
+    },
+    "number": {
+      "zone_duration": {
+        "name": "Zonen-Laufzeit"
+      },
+      "inter_zone_delay": {
+        "name": "Pause zwischen Zonen"
+      },
+      "max_runtime": {
+        "name": "Maximale Laufzeit"
+      }
     }
   },
   "services": {

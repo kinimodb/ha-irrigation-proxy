@@ -37,6 +37,15 @@ class SafetyManager:
         """Expose start times for orphan detection in coordinator."""
         return self._zone_start_times
 
+    @property
+    def max_runtime_minutes(self) -> int:
+        """Current max runtime in minutes."""
+        return self._max_runtime_seconds // 60
+
+    @max_runtime_minutes.setter
+    def max_runtime_minutes(self, value: int) -> None:
+        self._max_runtime_seconds = max(1, int(value)) * 60
+
     def start_deadman(self, zone: Zone) -> None:
         """Start a deadman timer for a zone. Cancels any existing timer first."""
         self.cancel_deadman(zone.valve_entity_id)
