@@ -90,17 +90,11 @@ class SafetyManager:
         for valve_id in list(self._timers):
             self.cancel_deadman(valve_id)
 
-        # Force-close every zone
+        # Force-close every zone (zone.force_close uses the correct service domain
+        # for both switch and valve entities).
         for zone in zones:
             try:
-                await self._hass.services.async_call(
-                    "switch",
-                    "turn_off",
-                    {"entity_id": zone.valve_entity_id},
-                    blocking=True,
-                )
-                zone.expected_state = False
-                zone.is_on = False
+                await zone.force_close(self._hass)
                 _LOGGER.info(
                     "Safety: valve %s closed (emergency)", zone.valve_entity_id
                 )

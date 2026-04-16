@@ -38,7 +38,7 @@ from .migration import migrate_v1_zones
 from .safety import SafetyManager
 from .scheduler import ProgramScheduler, ScheduleConfig, parse_start_times
 from .sequencer import Sequencer
-from .zone import Zone
+from .zone import Zone, entity_svc_close
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -129,9 +129,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await safety.emergency_shutdown(zones)
     if master_valve:
         try:
+            svc_domain, svc_action = entity_svc_close(master_valve)
             await hass.services.async_call(
-                "switch",
-                "turn_off",
+                svc_domain,
+                svc_action,
                 {"entity_id": master_valve},
                 blocking=True,
             )

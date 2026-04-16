@@ -15,6 +15,7 @@ from .conftest import FakeState, make_mock_hass
 
 
 MASTER = "switch.master_valve"
+MASTER_VALVE = "valve.master_valve"
 
 
 def _zones(n: int = 2) -> list[Zone]:
@@ -165,6 +166,58 @@ class TestMasterValveFlow:
             f"expected master to close first, got order {turn_off_order}"
         )
         assert "switch.valve_1" in turn_off_order
+        assert seq.state == SequencerState.IDLE
+
+
+class TestValveDomainMaster:
+    """Master valve is a valve.* entity — sequencer must use open_valve/close_valve."""
+
+    @pytest.mark.asyncio
+    async def test_valve_master_open_close_services(self) -> None:
+        zones = _zones(1)
+
+        state_map: dict[str, FakeState] = {
+            z.valve_entity_id: FakeState("off") for z in zones
+        }
+        state_map[MASTER_VALVE] = FakeState("closed")
+        call_log: list[tuple[str, str, str]] = []  # (domain, service, entity_id)
+
+        hass = make_mock_hass(state_map)
+        hass.async_create_task = MagicMock(
+            side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+        )
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            call_log.append((domain, service, eid))
+            if service in ("turn_on", "open_valve"):
+                state_map[eid] = FakeState("on" if domain == "switch" else "open")
+            elif service in ("turn_off", "close_valve"):
+                state_map[eid] = FakeState("off" if domain == "switch" else "closed")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=0,
+            master_valve_entity_id=MASTER_VALVE,
+            depressurize_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # Zone uses switch services, master uses valve services.
+        assert ("switch", "turn_on", "switch.valve_1") in call_log
+        assert ("valve", "open_valve", MASTER_VALVE) in call_log
+        assert ("valve", "close_valve", MASTER_VALVE) in call_log
+        assert ("switch", "turn_off", "switch.valve_1") in call_log
         assert seq.state == SequencerState.IDLE
 
 

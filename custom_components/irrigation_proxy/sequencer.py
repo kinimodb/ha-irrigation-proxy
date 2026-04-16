@@ -29,7 +29,6 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant
 
 from .const import (
@@ -42,6 +41,8 @@ from .const import (
     EVENT_ZONE_ERROR,
     EVENT_ZONE_STARTED,
 )
+
+from .zone import entity_state_is_on, entity_svc_close, entity_svc_open
 
 if TYPE_CHECKING:
     from .safety import SafetyManager
@@ -410,18 +411,20 @@ class Sequencer:
             return None
 
         _LOGGER.info("Sequencer: opening master valve %s", self._master_valve)
+        svc_domain, svc_action = entity_svc_open(self._master_valve)
         await self._hass.services.async_call(
-            "switch",
-            "turn_on",
+            svc_domain,
+            svc_action,
             {"entity_id": self._master_valve},
             blocking=True,
         )
         await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
         state = self._hass.states.get(self._master_valve)
         actual = state.state if state is not None else "unavailable"
-        if actual != STATE_ON:
+        if not entity_state_is_on(actual):
             _LOGGER.warning(
-                "Sequencer: master valve did not report 'on' after turn_on (state=%s)",
+                "Sequencer: master valve did not open after %s (state=%s)",
+                svc_action,
                 actual,
             )
             return False
@@ -433,26 +436,28 @@ class Sequencer:
             return
 
         _LOGGER.info("Sequencer: closing master valve %s", self._master_valve)
+        svc_domain, svc_action = entity_svc_close(self._master_valve)
         for attempt in range(1, DEFAULT_CLOSE_RETRY_MAX + 1):
             try:
                 await self._hass.services.async_call(
-                    "switch",
-                    "turn_off",
+                    svc_domain,
+                    svc_action,
                     {"entity_id": self._master_valve},
                     blocking=True,
                 )
             except Exception:
                 _LOGGER.exception(
-                    "Sequencer: failed to call turn_off on master valve (attempt %d)",
+                    "Sequencer: failed to call %s on master valve (attempt %d)",
+                    svc_action,
                     attempt,
                 )
             await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
             state = self._hass.states.get(self._master_valve)
             actual = state.state if state is not None else "unavailable"
-            if actual != STATE_ON:
+            if not entity_state_is_on(actual):
                 return
             _LOGGER.warning(
-                "Sequencer: master valve still on after attempt %d – retrying",
+                "Sequencer: master valve still open after attempt %d – retrying",
                 attempt,
             )
 

@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_ON
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -112,7 +111,7 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         entry = dict(data.get(valve_id, {}))
         entry.update(
             {
-                "is_on": state_str == STATE_ON,
+                "is_on": zone.is_on,
                 "name": zone.name,
                 "valve_entity_id": valve_id,
                 "expected_state": zone.expected_state,

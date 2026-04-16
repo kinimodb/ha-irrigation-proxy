@@ -190,3 +190,109 @@ class TestUpdateState:
     def test_unavailable(self, zone: Zone) -> None:
         zone.update_state("unavailable")
         assert zone.is_on is False
+
+    def test_open_state(self) -> None:
+        """valve.* entities report 'open' instead of 'on'."""
+        z = Zone(name="Valve Zone", valve_entity_id="valve.zone_1", duration_minutes=10)
+        z.update_state("open")
+        assert z.is_on is True
+
+    def test_closed_state(self) -> None:
+        z = Zone(name="Valve Zone", valve_entity_id="valve.zone_1", duration_minutes=10)
+        z.update_state("closed")
+        assert z.is_on is False
+
+
+class TestValveEntity:
+    """Tests for Zone with valve.* entity_id (open_valve / close_valve services)."""
+
+    @pytest.fixture
+    def valve_zone(self) -> Zone:
+        return Zone(
+            name="Garden",
+            valve_entity_id="valve.garden",
+            duration_minutes=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_on_calls_open_valve(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("open")})
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await valve_zone.turn_on(hass)
+
+        hass.services.async_call.assert_called_once_with(
+            "valve",
+            "open_valve",
+            {"entity_id": "valve.garden"},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_on_detects_open_state(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("open")})
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await valve_zone.turn_on(hass)
+
+        assert result is True
+        assert valve_zone.state_mismatch is False
+
+    @pytest.mark.asyncio
+    async def test_turn_off_calls_close_valve(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("closed")})
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await valve_zone.turn_off(hass)
+
+        hass.services.async_call.assert_called_once_with(
+            "valve",
+            "close_valve",
+            {"entity_id": "valve.garden"},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_turn_off_detects_closed_state(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("closed")})
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await valve_zone.turn_off(hass)
+
+        assert result is True
+        assert valve_zone.expected_state is False
+
+    @pytest.mark.asyncio
+    async def test_force_close_calls_close_valve(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("closed")})
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await valve_zone.force_close(hass)
+
+        assert result is True
+        hass.services.async_call.assert_called_with(
+            "valve",
+            "close_valve",
+            {"entity_id": "valve.garden"},
+            blocking=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_verify_open_state_matches_expected_on(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("open")})
+        valve_zone.expected_state = True
+
+        result = await valve_zone.verify_state(hass)
+
+        assert result is True
+        assert valve_zone.state_mismatch is False
+
+    @pytest.mark.asyncio
+    async def test_verify_closed_state_matches_expected_off(self, valve_zone: Zone) -> None:
+        hass = make_mock_hass({"valve.garden": FakeState("closed")})
+        valve_zone.expected_state = False
+
+        result = await valve_zone.verify_state(hass)
+
+        assert result is True
+        assert valve_zone.state_mismatch is False
