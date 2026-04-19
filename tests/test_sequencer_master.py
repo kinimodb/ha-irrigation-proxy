@@ -7,6 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from custom_components.irrigation_proxy.const import (
+    DEFAULT_CLOSE_RETRY_MAX,
+    EVENT_MASTER_CLOSE_FAILED,
+)
 from custom_components.irrigation_proxy.safety import SafetyManager
 from custom_components.irrigation_proxy.sequencer import Sequencer, SequencerState
 from custom_components.irrigation_proxy.zone import Zone
@@ -219,6 +223,146 @@ class TestValveDomainMaster:
         assert ("valve", "close_valve", MASTER_VALVE) in call_log
         assert ("switch", "turn_off", "switch.valve_1") in call_log
         assert seq.state == SequencerState.IDLE
+
+
+class TestMasterCloseFailed:
+    """W1: when `_close_master` exhausts its retries, the user must be told."""
+
+    def _build(
+        self,
+    ) -> tuple[Sequencer, MagicMock, dict[str, FakeState]]:
+        zones = _zones(1)
+        state_map: dict[str, FakeState] = {
+            z.valve_entity_id: FakeState("off") for z in zones
+        }
+        # Master starts closed, goes "on" on open, but never comes back off.
+        state_map[MASTER] = FakeState("off")
+
+        hass = make_mock_hass(state_map)
+        hass.async_create_task = MagicMock(
+            side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+        )
+        hass.bus = MagicMock()
+        hass.bus.async_fire = MagicMock()
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service in ("turn_on", "open_valve"):
+                state_map[eid] = FakeState("on")
+            elif service in ("turn_off", "close_valve"):
+                if eid == MASTER:
+                    # Master refuses to close – stays "on".
+                    return
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=0,
+            master_valve_entity_id=MASTER,
+            depressurize_seconds=0,
+        )
+        return seq, hass, state_map
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_retries_exhausted(self) -> None:
+        seq, hass, _ = self._build()
+        # Manually drive _close_master with a pre-opened master.
+        hass.states.get.side_effect = lambda eid: {MASTER: FakeState("on")}.get(eid)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await seq._close_master()
+
+        assert result is False, "expected False when master stays open"
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_master_closes(self) -> None:
+        """Happy path: master closes on first attempt → True."""
+        zones = _zones(1)
+        state_map: dict[str, FakeState] = {MASTER: FakeState("on")}
+        hass = make_mock_hass(state_map)
+
+        async def _track_call(domain, service, data, **kwargs):
+            state_map[data["entity_id"]] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+        hass.bus = MagicMock()
+        hass.bus.async_fire = MagicMock()
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=0,
+            master_valve_entity_id=MASTER,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await seq._close_master()
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_no_master_configured(self) -> None:
+        zones = _zones(1)
+        hass = make_mock_hass({})
+        hass.bus = MagicMock()
+        hass.bus.async_fire = MagicMock()
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=0,
+            master_valve_entity_id=None,
+        )
+        assert await seq._close_master() is True
+        # No event must be fired for the no-master case.
+        hass.bus.async_fire.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fires_bus_event_when_retries_exhausted(self) -> None:
+        seq, hass, _ = self._build()
+        hass.states.get.side_effect = lambda eid: {MASTER: FakeState("on")}.get(eid)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq._close_master()
+
+        fired = [
+            call.args for call in hass.bus.async_fire.call_args_list
+            if call.args[0] == EVENT_MASTER_CLOSE_FAILED
+        ]
+        assert len(fired) == 1
+        payload = fired[0][1]
+        assert payload["master_entity_id"] == MASTER
+        assert payload["attempts"] == DEFAULT_CLOSE_RETRY_MAX
+        assert payload["last_state"] == "on"
+
+    @pytest.mark.asyncio
+    async def test_raises_persistent_notification(self) -> None:
+        seq, hass, _ = self._build()
+        hass.states.get.side_effect = lambda eid: {MASTER: FakeState("on")}.get(eid)
+
+        # Patch the (lazy) import path used inside _notify_master_close_failed.
+        fake_pn = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {"homeassistant.components.persistent_notification": fake_pn},
+        ), patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq._close_master()
+
+        fake_pn.async_create.assert_called_once()
+        _args, kwargs = fake_pn.async_create.call_args
+        # Title and notification_id should mention master + entity.
+        assert "master" in kwargs.get("title", "").lower()
+        assert MASTER in kwargs.get("notification_id", "")
 
 
 class TestNoMaster:

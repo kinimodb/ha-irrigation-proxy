@@ -4,6 +4,21 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.11 — 2026-04-19
+
+### Safety
+- When `_close_master()` exhausts all retry attempts without the master
+  valve reporting closed, raise a persistent HA notification
+  ("Irrigation Proxy: master valve stuck open") and fire a
+  `irrigation_proxy_master_close_failed` bus event carrying
+  `master_entity_id`, `attempts`, and `last_state`. Previously the
+  failure was only logged at ERROR level, leaving water potentially
+  flowing with no user-visible signal.
+- `_close_master()` now returns `bool` (`True` = confirmed closed or no
+  master configured, `False` = retries exhausted). Callers currently
+  treat this as fire-and-forget; the event + notification serve as the
+  user-facing signal.
+
 ## v0.6.10 — 2026-04-19
 
 ### Fixed

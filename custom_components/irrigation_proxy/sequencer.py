@@ -33,6 +33,8 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     DEFAULT_CLOSE_RETRY_MAX,
+    DOMAIN,
+    EVENT_MASTER_CLOSE_FAILED,
     EVENT_PROGRAM_ABORTED,
     EVENT_PROGRAM_COMPLETED,
     EVENT_PROGRAM_STARTED,
@@ -572,13 +574,21 @@ class Sequencer:
             return False
         return True
 
-    async def _close_master(self) -> None:
-        """Close the master valve (best-effort, with retries)."""
+    async def _close_master(self) -> bool:
+        """Close the master valve (best-effort, with retries).
+
+        Returns True when the valve is confirmed closed (or no master is
+        configured). Returns False when every retry attempt was exhausted
+        without the valve reporting `off`/`closed`. On failure, a persistent
+        notification and `EVENT_MASTER_CLOSE_FAILED` are raised so the user
+        can intervene — otherwise the master would silently stay open.
+        """
         if not self._master_valve:
-            return
+            return True
 
         _LOGGER.info("Sequencer: closing master valve %s", self._master_valve)
         svc_domain, svc_action = entity_svc_close(self._master_valve)
+        last_state: str = "unknown"
         for attempt in range(1, DEFAULT_CLOSE_RETRY_MAX + 1):
             try:
                 await self._hass.services.async_call(
@@ -597,19 +607,73 @@ class Sequencer:
                 self._hass, self._master_valve, expected_on=False
             )
             state = self._hass.states.get(self._master_valve)
-            actual = state.state if state is not None else "unavailable"
-            if not entity_state_is_on(actual):
-                return
+            last_state = state.state if state is not None else "unavailable"
+            if not entity_state_is_on(last_state):
+                return True
             _LOGGER.warning(
                 "Sequencer: master valve still open after attempt %d – retrying",
                 attempt,
             )
 
         _LOGGER.error(
-            "Sequencer: master valve %s did NOT close after %d attempts",
+            "Sequencer: master valve %s did NOT close after %d attempts "
+            "(last_state=%s) – raising notification",
             self._master_valve,
             DEFAULT_CLOSE_RETRY_MAX,
+            last_state,
         )
+        self._notify_master_close_failed(last_state)
+        return False
+
+    def _notify_master_close_failed(self, last_state: str) -> None:
+        """Fire a bus event and raise a persistent notification.
+
+        W1: without this, a stuck-open master valve leaves water flowing
+        indefinitely with no user-visible signal.
+        """
+        master_id = self._master_valve or "unknown"
+        try:
+            self._hass.bus.async_fire(
+                EVENT_MASTER_CLOSE_FAILED,
+                {
+                    "master_entity_id": master_id,
+                    "attempts": DEFAULT_CLOSE_RETRY_MAX,
+                    "last_state": last_state,
+                },
+            )
+        except Exception:  # noqa: BLE001 – defensive
+            _LOGGER.exception(
+                "Sequencer: failed to fire master_close_failed event"
+            )
+
+        try:
+            from homeassistant.components import persistent_notification
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "Sequencer: persistent_notification unavailable"
+            )
+            return
+
+        title = "Irrigation Proxy: master valve stuck open"
+        message = (
+            f"Master valve `{master_id}` did not close after "
+            f"{DEFAULT_CLOSE_RETRY_MAX} attempts (last state: `{last_state}`). "
+            "Water may still be flowing. Close the valve manually and "
+            "investigate the Zigbee link or power supply before starting "
+            "another program."
+        )
+        notif_id = f"{DOMAIN}_master_close_failed_{master_id}"
+        try:
+            persistent_notification.async_create(
+                self._hass,
+                message,
+                title=title,
+                notification_id=notif_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Sequencer: failed to raise master-close persistent notification"
+            )
 
     def _reset(self) -> None:
         """Reset sequencer to idle state."""
