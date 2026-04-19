@@ -4,6 +4,17 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.7.2 — 2026-04-19
+
+### Changed
+- Disable `Inter-Zone Delay`, `Depressurize Delay` and `Max Runtime`
+  number entities by default. These are install-time / safety values
+  that rarely need daily tuning, so they no longer clutter the
+  auto-generated dashboard. Edit them through the options flow, or
+  re-enable the entity in the registry if you want a dashboard knob.
+- Per-zone `Zone Duration` number entities remain enabled by default
+  as the one number intended for regular tweaking.
+
 ## v0.7.1 — 2026-04-19
 
 ### Fixed
