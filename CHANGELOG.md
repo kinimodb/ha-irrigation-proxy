@@ -4,6 +4,23 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.9 — 2026-04-19
+
+### Safety
+- Arm each zone's deadman timer **before** issuing the open service call
+  instead of after state verification. Zigbee end-devices can acknowledge
+  an open several seconds after the 5 s verify window times out; the
+  pre-armed deadman now guarantees a safety net covers that race.
+- When `Zone.turn_on()` reports a verify mismatch, the sequencer now
+  defensively calls `Zone.force_close()` (which has its own retry + poll
+  loop) before cancelling the deadman. This closes any valve that opens
+  late due to Zigbee latency, instead of relying on the 30 s coordinator
+  poll to spot the orphan.
+
+### Fixed
+- Eliminate the orphan-open-valve window between `turn_on` returning
+  `False` and the next coordinator poll cycle.
+
 ## v0.6.8 — 2026-04-19
 
 ### Changed
