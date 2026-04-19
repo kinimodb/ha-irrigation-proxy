@@ -122,7 +122,20 @@ class CurrentZoneSensor(_BaseSensor):
 
     @property
     def native_value(self) -> str | None:
-        return self._seq_data().get("current_zone")
+        seq = self._seq_data()
+        current = seq.get("current_zone")
+        if current:
+            return current
+        # Idle (or running between zones) – preview the upcoming zone so the
+        # sensor never reads `unknown` while the rest of the program state
+        # is already known.
+        next_zone = seq.get("next_zone")
+        if next_zone:
+            return next_zone
+        zones = seq.get("zones") or []
+        if zones:
+            return zones[0].get("name")
+        return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -154,7 +167,10 @@ class ZoneTimeRemainingSensor(_BaseSensor):
     def native_value(self) -> int | None:
         seq = self._seq_data()
         if seq.get("state") == "running":
-            return seq.get("remaining_zone_seconds")
+            remaining = seq.get("remaining_zone_seconds")
+            # During pause/depressurize between zones there is no active zone
+            # countdown – show 0 instead of falling back to the idle preview.
+            return 0 if remaining is None else remaining
 
         zones = seq.get("zones") or []
         if zones:
@@ -244,7 +260,14 @@ class DepressurizeRemainingSensor(_BaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        return self._seq_data().get("depressurize_remaining_seconds")
+        seq = self._seq_data()
+        if seq.get("state") == "running":
+            remaining = seq.get("depressurize_remaining_seconds")
+            return 0 if remaining is None else remaining
+        # Idle preview – 0 without a master valve since the phase never runs.
+        if not seq.get("master_valve"):
+            return 0
+        return int(seq.get("depressurize_seconds") or 0)
 
 
 class PauseRemainingSensor(_BaseSensor):
@@ -266,4 +289,8 @@ class PauseRemainingSensor(_BaseSensor):
 
     @property
     def native_value(self) -> int | None:
-        return self._seq_data().get("pause_remaining_seconds")
+        seq = self._seq_data()
+        if seq.get("state") == "running":
+            remaining = seq.get("pause_remaining_seconds")
+            return 0 if remaining is None else remaining
+        return int(seq.get("pause_seconds") or 0)
