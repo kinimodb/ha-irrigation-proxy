@@ -4,6 +4,23 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.4 — 2026-04-19
+
+### Changed
+- Replace the blind 5 s `asyncio.sleep` after every valve switch with an
+  event-loop-friendly state poll (0.2 s tick, 5 s cap). On every zone cycle
+  the sequencer previously burned ~25 s of fixed waits (zone-open verify,
+  master-open verify, master-close verify, depressurize, zone-close verify);
+  it now returns as soon as the valve reports the new state, typically under
+  1 s per switch. A 2-zone × 1 min program with a 15 s pause now finishes
+  close to the expected ~135 s instead of ~185 s.
+
+### Safety
+- No change to the verification contract: every valve switch is still
+  confirmed against the actual entity state, still retries on close, and
+  still times out at 5 s per switch. Only the wait strategy changed from
+  fixed sleep to polling.
+
 ## v0.6.3 — 2026-04-19
 
 ### Fixed
