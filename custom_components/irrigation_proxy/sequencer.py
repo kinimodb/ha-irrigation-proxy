@@ -374,13 +374,32 @@ class Sequencer:
                     zone.duration_seconds,
                 )
 
+                # Arm the deadman BEFORE issuing the open command. Zigbee
+                # end-devices can ACK an open several seconds after our
+                # 5 s verify window times out – without a pre-armed deadman
+                # the valve would be an orphan until the 30 s coordinator
+                # poll catches it.
+                self._safety.start_deadman(zone)
+
                 # 1. Open zone (still no water – master is closed)
                 zone_ok = await zone.turn_on(self._hass)
                 if not zone_ok:
                     _LOGGER.error(
-                        "Sequencer: zone '%s' failed to open – skipping",
+                        "Sequencer: zone '%s' did not verify open – "
+                        "force-closing defensively in case of Zigbee latency",
                         zone.name,
                     )
+                    # Defensive close: force_close's own retry/poll loop
+                    # catches a valve that opens just after the verify
+                    # window. If the valve never opened, this is a no-op.
+                    try:
+                        await zone.force_close(self._hass)
+                    except Exception:
+                        _LOGGER.exception(
+                            "Sequencer: force_close after failed open raised "
+                            "for zone '%s'", zone.name,
+                        )
+                    self._safety.cancel_deadman(zone.valve_entity_id)
                     self._hass.bus.async_fire(
                         EVENT_ZONE_ERROR,
                         {
@@ -391,9 +410,6 @@ class Sequencer:
                         },
                     )
                     continue
-
-                # Deadman on the zone valve itself.
-                self._safety.start_deadman(zone)
 
                 self._hass.bus.async_fire(
                     EVENT_ZONE_STARTED,

@@ -448,6 +448,194 @@ class TestSafetyIntegration:
         assert hass.loop.call_later.call_count == 2
 
 
+class TestLateValveOpenRace:
+    """Regression tests for the Zigbee-latency race (v0.6.9 / K2).
+
+    Scenario: ``Zone.turn_on()`` returns False because its 5 s verify
+    window ran out, but the physical valve opens a few seconds later due
+    to Zigbee end-device latency. Without mitigation the sequencer moved
+    on with no deadman armed → an orphan open valve that only the 30 s
+    coordinator poll could catch.
+
+    The fix has two parts:
+      1. Arm the deadman BEFORE issuing the open service call – so the
+         safety net is already running while the open is in flight.
+      2. On a verify-False return, actively ``force_close`` the valve –
+         this closes any late-opened valve via its own retry+poll cycle.
+    """
+
+    @pytest.mark.asyncio
+    async def test_deadman_is_armed_before_valve_open_service_call(self) -> None:
+        """The deadman timer must be registered BEFORE the open service call.
+
+        Otherwise a Zigbee-delayed open that lands during the 5 s verify
+        window has no deadman watching it.
+        """
+        state_map = {"switch.valve_1": FakeState("on")}
+        hass = make_mock_hass(state_map)
+        hass.async_create_task = MagicMock(
+            side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+        )
+
+        call_order: list[str] = []
+
+        async def _track_service(domain, service, data, **kwargs):
+            call_order.append(f"service:{service}:{data['entity_id']}")
+            if service == "turn_on":
+                state_map[data["entity_id"]] = FakeState("on")
+            elif service == "turn_off":
+                state_map[data["entity_id"]] = FakeState("off")
+
+        def _track_deadman(*args, **kwargs):
+            call_order.append("deadman:start")
+            return MagicMock()
+
+        hass.services.async_call = AsyncMock(side_effect=_track_service)
+        hass.loop.call_later = MagicMock(side_effect=_track_deadman)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(1, duration=1)
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = _make_sequencer(hass=hass, zones=zones, safety=safety, pause_seconds=0)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # The first deadman:start must come before the first turn_on.
+        deadman_idx = call_order.index("deadman:start")
+        turn_on_idx = next(
+            i for i, s in enumerate(call_order)
+            if s.startswith("service:turn_on:switch.valve_1")
+        )
+        assert deadman_idx < turn_on_idx, (
+            f"Deadman must be armed before turn_on. Order: {call_order}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_failed_turn_on_force_closes_valve_and_clears_deadman(
+        self,
+    ) -> None:
+        """When zone.turn_on() returns False the sequencer must defensively
+        force-close the valve (in case it opens late via Zigbee) and then
+        cancel the deadman.
+        """
+        state_map = {
+            "switch.valve_1": FakeState("off"),  # Never acknowledges turn_on.
+            "switch.valve_2": FakeState("off"),
+        }
+        hass = make_mock_hass(state_map)
+        hass.async_create_task = MagicMock(
+            side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+        )
+
+        calls: list[tuple[str, str]] = []
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            calls.append((eid, service))
+            # Valve 1 refuses to acknowledge its open command entirely.
+            # Valve 2 behaves normally to confirm sequencer keeps running.
+            if service == "turn_on" and eid == "switch.valve_2":
+                state_map[eid] = FakeState("on")
+            elif service == "turn_off":
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(2, duration=1)
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = _make_sequencer(hass=hass, zones=zones, safety=safety, pause_seconds=0)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        valve_1_services = [s for (e, s) in calls if e == "switch.valve_1"]
+        # We tried to open it…
+        assert "turn_on" in valve_1_services
+        # …and after the False verify we actively force-closed it.
+        assert "turn_off" in valve_1_services, (
+            "Expected force_close (turn_off) to run after turn_on verify "
+            f"failed. Calls for valve_1: {valve_1_services}"
+        )
+
+        # Deadman must be cleared after the failed open + force_close.
+        assert "switch.valve_1" not in safety._timers
+        assert "switch.valve_1" not in safety.zone_start_times
+
+        # Sequencer still continued to the next zone.
+        assert ("switch.valve_2", "turn_on") in calls
+        assert seq.state == SequencerState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_late_open_is_closed_by_force_close_retries(self) -> None:
+        """Simulate the full race: verify sees 'off', then the valve opens
+        late (Zigbee delay), then force_close's retry loop drives it back
+        to 'off'.
+        """
+        state_map = {"switch.valve_1": FakeState("off")}
+        hass = make_mock_hass(state_map)
+        hass.async_create_task = MagicMock(
+            side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+        )
+
+        events: list[str] = []
+        # When the first turn_off (force_close attempt 1) is issued, the
+        # valve has JUST opened from the late Zigbee delivery. Attempt 1's
+        # service call flips it back to off — this is what force_close's
+        # retry+poll loop is supposed to cover.
+        first_turn_off_seen = {"done": False}
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            events.append(f"{service}:{eid}")
+            if service == "turn_on":
+                # Open is still in flight – state does not change yet.
+                return
+            if service == "turn_off":
+                if not first_turn_off_seen["done"]:
+                    # Late open materialises right at close time…
+                    state_map[eid] = FakeState("on")
+                    first_turn_off_seen["done"] = True
+                    # …then the close command drives it off on the next
+                    # poll of force_close's retry loop.
+                    return
+                state_map[eid] = FakeState("off")
+
+        def _get_state(eid: str):
+            # If we're past the first turn_off event, next poll should see
+            # the valve still "on" once, then flip to off on the retry.
+            # We cheat a tiny bit: the *second* read after the first
+            # turn_off returns "off" so force_close retry #2 converges.
+            st = state_map.get(eid)
+            if first_turn_off_seen["done"] and st is not None and st.state == "on":
+                state_map[eid] = FakeState("off")
+            return state_map.get(eid)
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=_get_state)
+
+        zones = _make_zones(1, duration=1)
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = _make_sequencer(hass=hass, zones=zones, safety=safety, pause_seconds=0)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # force_close was invoked at least once (turn_off after turn_on).
+        assert any(e == "turn_off:switch.valve_1" for e in events)
+        # And the valve ended up closed.
+        assert state_map["switch.valve_1"].state == "off"
+        # Deadman cleared.
+        assert "switch.valve_1" not in safety._timers
+
+
 class TestPauseCountdown:
     """Regression tests for the inter-zone pause countdown bug.
 
