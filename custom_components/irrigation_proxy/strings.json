@@ -22,6 +22,7 @@
           "basics": "Basics (schedule, master valve)",
           "zones": "Zones",
           "advanced": "Advanced (delays, safety)",
+          "safety": "Safety (leak sensors)",
           "save": "Save & close"
         }
       },
@@ -74,6 +75,16 @@
           "inter_zone_delay_seconds": "Pause after a zone finishes before the next zone starts.",
           "depressurize_seconds": "Wait after closing the master valve before closing the zone valve – lets pressure drain safely.",
           "max_runtime_minutes": "Safety deadman: if a valve stays open longer than this, it is force-closed."
+        }
+      },
+      "safety": {
+        "title": "Safety – leak sensors",
+        "description": "Pick the water-leak and water-shortage binary sensors that should trigger an immediate emergency shutdown. If any of them reports 'on', the running program is stopped and every configured valve (zones + master) is force-closed.",
+        "data": {
+          "leak_sensors": "Leak / shortage binary sensors"
+        },
+        "data_description": {
+          "leak_sensors": "For Sonoff SWV valves via Zigbee2MQTT these are typically 'binary_sensor.sonoff_swv_*_water_leak' and 'binary_sensor.sonoff_swv_*_water_shortage'."
         }
       }
     },

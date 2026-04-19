@@ -12,6 +12,7 @@ from homeassistant.core import Event, HomeAssistant, ServiceCall
 from .const import (
     CONF_DEPRESSURIZE_SECONDS,
     CONF_INTER_ZONE_DELAY_SECONDS,
+    CONF_LEAK_SENSORS,
     CONF_MASTER_VALVE,
     CONF_MAX_RUNTIME_MINUTES,
     CONF_SCHEDULE_ENABLED,
@@ -122,6 +123,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     master_valve: str | None = raw.get(CONF_MASTER_VALVE) or None
 
+    leak_sensors_raw = raw.get(CONF_LEAK_SENSORS) or []
+    if isinstance(leak_sensors_raw, str):
+        leak_sensors_raw = [leak_sensors_raw]
+    leak_sensors = [
+        str(s) for s in leak_sensors_raw if isinstance(s, str) and s
+    ]
+
     zones = _build_zones(raw)
 
     # Safety: close all valves (zones + master) on startup for crash recovery.
@@ -151,7 +159,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         depressurize_seconds=depressurize,
     )
 
-    coordinator = IrrigationCoordinator(hass, entry, zones, safety, sequencer)
+    coordinator = IrrigationCoordinator(
+        hass, entry, zones, safety, sequencer, leak_sensors=leak_sensors
+    )
 
     scheduler = ProgramScheduler(
         hass=hass,
@@ -175,6 +185,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     coordinator.start_state_tracking()
+    coordinator.start_leak_tracking()
     scheduler.reload()
 
     if not hass.services.has_service(DOMAIN, SERVICE_START_PROGRAM):

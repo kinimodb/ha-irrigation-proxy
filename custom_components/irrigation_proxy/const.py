@@ -32,6 +32,10 @@ CONF_INTER_ZONE_DELAY_SECONDS: Final = "inter_zone_delay_seconds"
 
 # Safety
 CONF_MAX_RUNTIME_MINUTES: Final = "max_runtime_minutes"
+# Optional list of binary_sensor entity_ids that signal a water leak or
+# water shortage. When any of them transitions to 'on', the sequencer is
+# stopped and all valves (zones + master) are force-closed.
+CONF_LEAK_SENSORS: Final = "leak_sensors"
 
 # -- Weekdays --------------------------------------------------------------
 
@@ -74,6 +78,7 @@ EVENT_PROGRAM_ABORTED: Final = f"{DOMAIN}_program_aborted"
 EVENT_ZONE_STARTED: Final = f"{DOMAIN}_zone_started"
 EVENT_ZONE_COMPLETED: Final = f"{DOMAIN}_zone_completed"
 EVENT_ZONE_ERROR: Final = f"{DOMAIN}_zone_error"
+EVENT_LEAK_DETECTED: Final = f"{DOMAIN}_leak_detected"
 
 # -- Service names ---------------------------------------------------------
 
