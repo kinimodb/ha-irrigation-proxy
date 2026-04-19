@@ -4,6 +4,28 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.7 — 2026-04-19
+
+### Added
+- Add a `Safety – leak sensors` step to the options flow. Pick one or
+  more `binary_sensor` entities (typically the Sonoff SWV
+  `*_water_leak` and `*_water_shortage` sensors) that should trigger an
+  immediate emergency shutdown.
+- Fire `irrigation_proxy_leak_detected` on the HA bus whenever a leak
+  emergency runs, with the triggering sensor's entity id and state.
+
+### Safety
+- Subscribe to the configured leak / water-shortage sensors at setup.
+  When any of them transitions to `on` (including a sensor that is
+  already `on` at integration startup), the coordinator stops the
+  running program, force-closes every zone valve and explicitly closes
+  the master valve, and raises a persistent notification. Previously a
+  leak detected by the valve hardware was ignored and the program kept
+  running.
+- The handler is idempotent: concurrent state-change events for the
+  same or other leak sensors are coalesced into a single shutdown run
+  so retries never race against the close path.
+
 ## v0.6.6 — 2026-04-19
 
 ### Fixed

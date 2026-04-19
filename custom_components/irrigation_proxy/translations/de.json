@@ -22,6 +22,7 @@
           "basics": "Basis (Zeitplan, Hauptventil)",
           "zones": "Zonen",
           "advanced": "Erweitert (Verzögerungen, Sicherheit)",
+          "safety": "Sicherheit (Lecksensoren)",
           "save": "Speichern & schließen"
         }
       },
@@ -74,6 +75,16 @@
           "inter_zone_delay_seconds": "Wartezeit nachdem eine Zone fertig ist, bevor die nächste startet.",
           "depressurize_seconds": "Wartezeit nach dem Schließen des Hauptventils, bevor das Zonen-Ventil schließt – damit sich der Druck sauber abbaut.",
           "max_runtime_minutes": "Sicherheits-Deadman: Bleibt ein Ventil länger als dies offen, wird es zwangsweise geschlossen."
+        }
+      },
+      "safety": {
+        "title": "Sicherheit – Lecksensoren",
+        "description": "Wähle die Water-Leak- und Water-Shortage-Binärsensoren, die einen sofortigen Notaus auslösen sollen. Meldet einer von ihnen 'on', wird das laufende Programm gestoppt und jedes konfigurierte Ventil (Zonen + Hauptventil) zwangsweise geschlossen.",
+        "data": {
+          "leak_sensors": "Leck-/Wassermangel-Sensoren"
+        },
+        "data_description": {
+          "leak_sensors": "Bei Sonoff SWV via Zigbee2MQTT üblicherweise 'binary_sensor.sonoff_swv_*_water_leak' und 'binary_sensor.sonoff_swv_*_water_shortage'."
         }
       }
     },

@@ -31,6 +31,7 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_DEPRESSURIZE_SECONDS,
     CONF_INTER_ZONE_DELAY_SECONDS,
+    CONF_LEAK_SENSORS,
     CONF_MASTER_VALVE,
     CONF_MAX_RUNTIME_MINUTES,
     CONF_NAME,
@@ -122,6 +123,16 @@ def _switch_entity_field() -> Any:
     return selector.EntitySelector(selector.EntitySelectorConfig())
 
 
+def _leak_sensor_field() -> Any:
+    """Entity selector restricted to binary_sensor, multiple selection."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            domain="binary_sensor",
+            multiple=True,
+        )
+    )
+
+
 def _validate_start_times(raw: str | list[str] | None) -> list[str]:
     """Parse a schedule_start_times input to HH:MM strings."""
     parsed = parse_start_times(raw)
@@ -142,6 +153,7 @@ def _default_entry_data(name: str) -> dict[str, Any]:
         CONF_INTER_ZONE_DELAY_SECONDS: DEFAULT_INTER_ZONE_DELAY_SECONDS,
         CONF_DEPRESSURIZE_SECONDS: DEFAULT_DEPRESSURIZE_SECONDS,
         CONF_MAX_RUNTIME_MINUTES: DEFAULT_MAX_RUNTIME_MINUTES,
+        CONF_LEAK_SENSORS: [],
     }
 
 
@@ -209,7 +221,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
         """Top-level menu – this is what the user lands on."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["basics", "zones", "advanced", "save"],
+            menu_options=["basics", "zones", "advanced", "safety", "save"],
         )
 
     # ---- Basics -------------------------------------------------------
@@ -486,6 +498,34 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                             DEFAULT_MAX_RUNTIME_MINUTES,
                         ),
                     ): _max_runtime_field(),
+                }
+            ),
+        )
+
+    # ---- Safety -------------------------------------------------------
+
+    async def async_step_safety(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Configure water-leak / water-shortage sensors that trigger a full shutdown."""
+        if user_input is not None:
+            raw = user_input.get(CONF_LEAK_SENSORS) or []
+            if isinstance(raw, str):
+                raw = [raw]
+            sensors = [
+                str(s) for s in raw if isinstance(s, str) and s
+            ]
+            self._pending[CONF_LEAK_SENSORS] = sensors
+            return await self.async_step_init()
+
+        return self.async_show_form(
+            step_id="safety",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_LEAK_SENSORS,
+                        default=self._pending.get(CONF_LEAK_SENSORS) or [],
+                    ): _leak_sensor_field(),
                 }
             ),
         )
