@@ -87,6 +87,8 @@ class Sequencer:
         self._current_index: int = -1
         self._current_zone: Zone | None = None
         self._zone_started_at: datetime | None = None
+        self._pause_started_at: datetime | None = None
+        self._pause_duration_seconds: int = 0
         self._task: asyncio.Task[None] | None = None
 
     # -- Config accessors -----------------------------------------------
@@ -152,6 +154,16 @@ class Sequencer:
         return max(0, int(round(duration_sec - elapsed)))
 
     @property
+    def pause_remaining_seconds(self) -> int | None:
+        """Seconds left in the current inter-zone pause, or None if not pausing."""
+        if self._pause_started_at is None:
+            return None
+        elapsed = (
+            datetime.now(timezone.utc) - self._pause_started_at
+        ).total_seconds()
+        return max(0, int(round(self._pause_duration_seconds - elapsed)))
+
+    @property
     def total_program_seconds_idle(self) -> int:
         """Total runtime of a full program when idle – zones + gaps."""
         if not self._zones:
@@ -169,9 +181,18 @@ class Sequencer:
         if self._current_index < 0:
             return None
 
-        current_remaining = self.remaining_zone_seconds or 0
         pending_zones = self._zones[self._current_index + 1 :]
         pending_seconds = sum(z.duration_seconds for z in pending_zones)
+
+        if self._pause_started_at is not None:
+            # In inter-zone pause: _current_index still points at the zone
+            # just finished. Remaining = pause left + all pending zones +
+            # gaps between those pending zones (len - 1, not len).
+            pause_left = self.pause_remaining_seconds or 0
+            future_gaps = max(0, len(pending_zones) - 1) * self._pause_seconds
+            return int(pause_left + pending_seconds + future_gaps)
+
+        current_remaining = self.remaining_zone_seconds or 0
         gaps = len(pending_zones) * self._pause_seconds
         return int(current_remaining + pending_seconds + gaps)
 
@@ -179,6 +200,11 @@ class Sequencer:
     def progress(self) -> dict[str, Any]:
         return {
             "state": self._state.value,
+            "phase": (
+                "pausing"
+                if self._pause_started_at is not None
+                else self._state.value
+            ),
             "current_zone": self._current_zone.name if self._current_zone else None,
             "current_zone_entity_id": (
                 self._current_zone.valve_entity_id
@@ -189,6 +215,7 @@ class Sequencer:
             "total_zones": len(self._zones),
             "next_zone": self.next_zone.name if self.next_zone else None,
             "remaining_zone_seconds": self.remaining_zone_seconds,
+            "pause_remaining_seconds": self.pause_remaining_seconds,
             "total_remaining_seconds": self.total_remaining_seconds,
             "pause_seconds": self._pause_seconds,
             "master_valve": self._master_valve,
@@ -365,7 +392,13 @@ class Sequencer:
                     )
                     self._current_zone = None
                     self._zone_started_at = None
-                    await asyncio.sleep(self._pause_seconds)
+                    self._pause_started_at = datetime.now(timezone.utc)
+                    self._pause_duration_seconds = self._pause_seconds
+                    try:
+                        await asyncio.sleep(self._pause_seconds)
+                    finally:
+                        self._pause_started_at = None
+                        self._pause_duration_seconds = 0
 
             _LOGGER.info("Sequencer: program completed successfully")
             self._hass.bus.async_fire(
@@ -481,4 +514,6 @@ class Sequencer:
         self._current_index = -1
         self._current_zone = None
         self._zone_started_at = None
+        self._pause_started_at = None
+        self._pause_duration_seconds = 0
         self._task = None
