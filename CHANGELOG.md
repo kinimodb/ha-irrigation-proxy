@@ -4,6 +4,14 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.7.1 — 2026-04-19
+
+### Fixed
+- Remove leftover `sensor.<zone>_duration` entities that stayed as
+  `unavailable` in the entity registry after upgrading to v0.7.0. The
+  integration now purges these stale IDs on setup; adjust per-zone
+  runtime via the `number.<zone>_duration` entity instead.
+
 ## v0.7.0 — 2026-04-19
 
 ### Added
