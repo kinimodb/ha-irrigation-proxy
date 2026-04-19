@@ -4,6 +4,29 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.7.4 — 2026-04-19
+
+### Changed
+- `Pause Remaining` sensor now reports the **sum of every inter-zone
+  pause still to come in the program**, not just the current pause.
+  Renamed to `Pauses Total Remaining`. The current phase's own
+  countdown is preserved on the `current_phase_remaining_seconds`
+  attribute.
+- `Depressurize Remaining` sensor likewise reports the sum of every
+  remaining master-valve drain phase. Renamed to
+  `Depressurize Total Remaining`; current phase countdown moved to the
+  `current_phase_remaining_seconds` attribute.
+- `Program Total Remaining` gained three attributes –
+  `zones_remaining_seconds`, `pauses_remaining_seconds`,
+  `depressurize_remaining_seconds` – so the total can be decomposed on
+  a dashboard without template sensors.
+
+**BREAKING:** The `pause_remaining` and `depressurize_remaining`
+sensor states changed meaning. Automations that watched them as a
+per-phase countdown should read the new
+`current_phase_remaining_seconds` attribute instead. Entity IDs are
+unchanged.
+
 ## v0.7.3 — 2026-04-19
 
 ### Changed

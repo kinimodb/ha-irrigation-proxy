@@ -140,10 +140,10 @@
         "name": "Zone Restzeit"
       },
       "depressurize_remaining": {
-        "name": "Druckabbau Restzeit"
+        "name": "Druckabbau Gesamt-Restzeit"
       },
       "pause_remaining": {
-        "name": "Pause Restzeit"
+        "name": "Pausen Gesamt-Restzeit"
       },
       "program_total_remaining": {
         "name": "Programm Restzeit"
