@@ -145,17 +145,14 @@ class TestForceClose:
     @pytest.mark.asyncio
     async def test_succeeds_on_retry(self, zone: Zone) -> None:
         """Valve stays on for 2 attempts, closes on 3rd."""
-        call_count = 0
+        hass = make_mock_hass()
 
         def _get_state(entity_id: str) -> FakeState:
-            nonlocal call_count
-            call_count += 1
-            # First 2 reads: still on. Third: off.
-            if call_count <= 2:
-                return FakeState("on")
-            return FakeState("off")
+            # State flips to "off" only after the 3rd turn_off call.
+            if hass.services.async_call.call_count >= 3:
+                return FakeState("off")
+            return FakeState("on")
 
-        hass = make_mock_hass()
         hass.states.get = _get_state
 
         with patch("asyncio.sleep", new_callable=AsyncMock):

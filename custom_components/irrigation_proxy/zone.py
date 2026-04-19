@@ -8,12 +8,38 @@ from datetime import datetime, timezone
 
 from homeassistant.core import HomeAssistant
 
-from .const import DEFAULT_CLOSE_RETRY_MAX, DEFAULT_STATE_VERIFY_DELAY_SECONDS
+from .const import (
+    DEFAULT_CLOSE_RETRY_MAX,
+    DEFAULT_STATE_VERIFY_TIMEOUT_SECONDS,
+    STATE_VERIFY_POLL_INTERVAL_SECONDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 # States that mean a valve/switch is open/on.
 _ENTITY_ON_STATES: frozenset[str] = frozenset({"on", "open"})
+
+
+async def wait_for_entity_state(
+    hass: HomeAssistant,
+    entity_id: str,
+    expected_on: bool,
+    timeout: float = DEFAULT_STATE_VERIFY_TIMEOUT_SECONDS,
+    poll_interval: float = STATE_VERIFY_POLL_INTERVAL_SECONDS,
+) -> bool:
+    """Poll *entity_id* until its state matches *expected_on* or *timeout* expires.
+
+    Returns True as soon as the state matches, False if the budget is exhausted.
+    """
+    max_iterations = max(1, int(timeout / poll_interval))
+    for i in range(max_iterations + 1):
+        state = hass.states.get(entity_id)
+        actual = state.state if state is not None else "unavailable"
+        if entity_state_is_on(actual) == expected_on:
+            return True
+        if i < max_iterations:
+            await asyncio.sleep(poll_interval)
+    return False
 
 
 def entity_svc_open(entity_id: str) -> tuple[str, str]:
@@ -86,7 +112,7 @@ class Zone:
             blocking=True,
         )
 
-        await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
+        await wait_for_entity_state(hass, self.valve_entity_id, expected_on=True)
         verified = await self.verify_state(hass)
 
         if verified:
@@ -117,7 +143,7 @@ class Zone:
             blocking=True,
         )
 
-        await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
+        await wait_for_entity_state(hass, self.valve_entity_id, expected_on=False)
         verified = await self.verify_state(hass)
 
         if verified:
@@ -166,7 +192,7 @@ class Zone:
                 blocking=True,
             )
 
-            await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
+            await wait_for_entity_state(hass, self.valve_entity_id, expected_on=False)
 
             actual = self._get_actual_state(hass)
             if not entity_state_is_on(actual):

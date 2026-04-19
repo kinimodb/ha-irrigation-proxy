@@ -54,7 +54,12 @@ DEFAULT_DEPRESSURIZE_SECONDS: Final = 5
 DEFAULT_SCHEDULE_ENABLED: Final = False
 
 DEFAULT_UPDATE_INTERVAL_SECONDS: Final = 30
-DEFAULT_STATE_VERIFY_DELAY_SECONDS: Final = 5
+# Maximum time we wait for a valve/switch to reflect the commanded state
+# before we consider the switch a failure. Actual wait is typically much
+# shorter – we poll the state in STATE_VERIFY_POLL_INTERVAL_SECONDS ticks
+# and return as soon as the state matches.
+DEFAULT_STATE_VERIFY_TIMEOUT_SECONDS: Final = 5
+STATE_VERIFY_POLL_INTERVAL_SECONDS: Final = 0.2
 DEFAULT_CLOSE_RETRY_MAX: Final = 3
 DEFAULT_SAFETY_MARGIN_SECONDS: Final = 30
 

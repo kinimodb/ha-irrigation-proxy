@@ -33,7 +33,6 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     DEFAULT_CLOSE_RETRY_MAX,
-    DEFAULT_STATE_VERIFY_DELAY_SECONDS,
     EVENT_PROGRAM_ABORTED,
     EVENT_PROGRAM_COMPLETED,
     EVENT_PROGRAM_STARTED,
@@ -42,7 +41,12 @@ from .const import (
     EVENT_ZONE_STARTED,
 )
 
-from .zone import entity_state_is_on, entity_svc_close, entity_svc_open
+from .zone import (
+    entity_state_is_on,
+    entity_svc_close,
+    entity_svc_open,
+    wait_for_entity_state,
+)
 
 if TYPE_CHECKING:
     from .safety import SafetyManager
@@ -418,7 +422,9 @@ class Sequencer:
             {"entity_id": self._master_valve},
             blocking=True,
         )
-        await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
+        await wait_for_entity_state(
+            self._hass, self._master_valve, expected_on=True
+        )
         state = self._hass.states.get(self._master_valve)
         actual = state.state if state is not None else "unavailable"
         if not entity_state_is_on(actual):
@@ -451,7 +457,9 @@ class Sequencer:
                     svc_action,
                     attempt,
                 )
-            await asyncio.sleep(DEFAULT_STATE_VERIFY_DELAY_SECONDS)
+            await wait_for_entity_state(
+                self._hass, self._master_valve, expected_on=False
+            )
             state = self._hass.states.get(self._master_valve)
             actual = state.state if state is not None else "unavailable"
             if not entity_state_is_on(actual):
