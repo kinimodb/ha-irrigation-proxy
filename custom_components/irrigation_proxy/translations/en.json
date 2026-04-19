@@ -21,8 +21,8 @@
         "menu_options": {
           "basics": "Basics (schedule, master valve)",
           "zones": "Zones",
-          "advanced": "Advanced (delays, safety)",
-          "safety": "Safety (leak sensors)",
+          "advanced": "Advanced (delays, limits)",
+          "safety": "Safety",
           "save": "Save & close"
         }
       },
@@ -78,13 +78,21 @@
         }
       },
       "safety": {
-        "title": "Safety – leak sensors",
-        "description": "Pick the water-leak and water-shortage binary sensors that should trigger an immediate emergency shutdown. If any of them reports 'on', the running program is stopped and every configured valve (zones + master) is force-closed.",
+        "title": "Safety",
+        "description": "Configure safety mechanisms that can stop the program and close every valve.",
+        "menu_options": {
+          "safety_leak_sensors": "Leak sensors",
+          "init": "Back to main menu"
+        }
+      },
+      "safety_leak_sensors": {
+        "title": "Leak sensors",
+        "description": "Pick the water-leak and water-shortage binary sensors that should trigger an immediate emergency shutdown. If any of them reports 'on', the running program is stopped and every configured valve (zones + master) is force-closed. A persistent notification is raised and the 'irrigation_proxy_leak_detected' event is fired for automations.",
         "data": {
-          "leak_sensors": "Leak / shortage binary sensors"
+          "leak_sensors": "Leak and water-shortage sensors"
         },
         "data_description": {
-          "leak_sensors": "For Sonoff SWV valves via Zigbee2MQTT these are typically 'binary_sensor.sonoff_swv_*_water_leak' and 'binary_sensor.sonoff_swv_*_water_shortage'."
+          "leak_sensors": "For Sonoff SWV valves via Zigbee2MQTT these are typically 'binary_sensor.sonoff_swv_*_water_leak' and 'binary_sensor.sonoff_swv_*_water_shortage'. Multiple sensors can be selected; any one reporting 'on' triggers the shutdown."
         }
       }
     },

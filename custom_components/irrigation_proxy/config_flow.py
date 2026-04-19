@@ -502,9 +502,20 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
             ),
         )
 
-    # ---- Safety -------------------------------------------------------
+    # ---- Safety (submenu) --------------------------------------------
 
     async def async_step_safety(
+        self, user_input: dict[str, Any] | None = None
+    ) -> Any:
+        """Submenu for safety features. Currently only leak sensors,
+        but structured so additional safety features can be added later
+        without rearranging the main options menu."""
+        return self.async_show_menu(
+            step_id="safety",
+            menu_options=["safety_leak_sensors", "init"],
+        )
+
+    async def async_step_safety_leak_sensors(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
         """Configure water-leak / water-shortage sensors that trigger a full shutdown."""
@@ -516,10 +527,10 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                 str(s) for s in raw if isinstance(s, str) and s
             ]
             self._pending[CONF_LEAK_SENSORS] = sensors
-            return await self.async_step_init()
+            return await self.async_step_safety()
 
         return self.async_show_form(
-            step_id="safety",
+            step_id="safety_leak_sensors",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
