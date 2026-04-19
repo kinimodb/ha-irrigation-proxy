@@ -4,6 +4,16 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.7.3 — 2026-04-19
+
+### Changed
+- Idle sensors no longer report `unknown`. `Pause Remaining`,
+  `Depressurize Remaining` and `Current Zone` now preview the values
+  that will apply on the next run while the program is idle, drop to
+  `0` during a run whenever the respective phase is inactive, and
+  snap back to the preview once the program completes. Matches the
+  existing behaviour of `Program Total Remaining`.
+
 ## v0.7.2 — 2026-04-19
 
 ### Changed
