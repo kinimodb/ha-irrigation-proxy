@@ -4,6 +4,28 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.6 — 2026-04-19
+
+### Fixed
+- Program Total Remaining now also accounts for the post-zone depressurize
+  wait (when a master valve is configured). Previously the countdown
+  dropped at the boundary between zone-end and depressurize and then
+  dropped again at the start of the inter-zone pause, because neither
+  phase was reflected in the total. The remaining-seconds estimate now
+  includes every interval whose duration is known (zone runtime,
+  depressurize, inter-zone pause); only zigbee command latencies remain
+  unaccounted for.
+
+### Added
+- Expose `depressurize_remaining_seconds` and extend the `phase` field
+  with a `depressurizing` value on the sequencer progress snapshot for
+  diagnostics.
+
+### Safety
+- No valve-path changes in this release. The fix is limited to the
+  countdown math and does not alter when or how zones / master valves
+  open or close.
+
 ## v0.6.5 — 2026-04-19
 
 ### Fixed

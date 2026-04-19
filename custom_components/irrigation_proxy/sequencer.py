@@ -89,6 +89,8 @@ class Sequencer:
         self._zone_started_at: datetime | None = None
         self._pause_started_at: datetime | None = None
         self._pause_duration_seconds: int = 0
+        self._depressurize_started_at: datetime | None = None
+        self._depressurize_duration_seconds: int = 0
         self._task: asyncio.Task[None] | None = None
 
     # -- Config accessors -----------------------------------------------
@@ -164,47 +166,100 @@ class Sequencer:
         return max(0, int(round(self._pause_duration_seconds - elapsed)))
 
     @property
+    def depressurize_remaining_seconds(self) -> int | None:
+        """Seconds left in the current depressurize wait, or None if not active."""
+        if self._depressurize_started_at is None:
+            return None
+        elapsed = (
+            datetime.now(timezone.utc) - self._depressurize_started_at
+        ).total_seconds()
+        return max(0, int(round(self._depressurize_duration_seconds - elapsed)))
+
+    @property
+    def _depressurize_active_seconds(self) -> int:
+        """Per-zone depressurize wait that actually runs (0 without master)."""
+        if self._master_valve and self._depressurize_seconds > 0:
+            return self._depressurize_seconds
+        return 0
+
+    def _zone_block_seconds(self, zone_index: int) -> int:
+        """Full predictable block of one zone: duration + depressurize + trailing pause."""
+        if zone_index < 0 or zone_index >= len(self._zones):
+            return 0
+        block = self._zones[zone_index].duration_seconds
+        block += self._depressurize_active_seconds
+        if zone_index < len(self._zones) - 1:
+            block += self._pause_seconds
+        return block
+
+    def _future_blocks_seconds(self, after_index: int) -> int:
+        return sum(
+            self._zone_block_seconds(j)
+            for j in range(after_index + 1, len(self._zones))
+        )
+
+    @property
     def total_program_seconds_idle(self) -> int:
-        """Total runtime of a full program when idle – zones + gaps."""
+        """Total runtime of a full program when idle – zones + depressurize + gaps."""
         if not self._zones:
             return 0
-        zone_sum = sum(z.duration_seconds for z in self._zones)
-        gaps = max(0, len(self._zones) - 1) * self._pause_seconds
-        return int(zone_sum + gaps)
+        return sum(
+            self._zone_block_seconds(i) for i in range(len(self._zones))
+        )
 
     @property
     def total_remaining_seconds(self) -> int | None:
-        """Estimated seconds left across the full program."""
+        """Estimated seconds left across the full program.
+
+        Includes everything we know about: the current phase's remaining time,
+        the depressurize wait that follows each zone (when a master valve is
+        configured), and inter-zone pauses. Unknown zigbee command latencies
+        between phases stay unaccounted for.
+        """
         if self._state == SequencerState.IDLE:
             return self.total_program_seconds_idle
 
         if self._current_index < 0:
             return None
 
-        pending_zones = self._zones[self._current_index + 1 :]
-        pending_seconds = sum(z.duration_seconds for z in pending_zones)
+        idx = self._current_index
+        is_last = idx >= len(self._zones) - 1
+        future = self._future_blocks_seconds(idx)
+        trailing_pause = 0 if is_last else self._pause_seconds
 
         if self._pause_started_at is not None:
-            # In inter-zone pause: _current_index still points at the zone
-            # just finished. Remaining = pause left + all pending zones +
-            # gaps between those pending zones (len - 1, not len).
+            # Inter-zone pause: depressurize already happened.
             pause_left = self.pause_remaining_seconds or 0
-            future_gaps = max(0, len(pending_zones) - 1) * self._pause_seconds
-            return int(pause_left + pending_seconds + future_gaps)
+            return int(pause_left + future)
 
+        if self._depressurize_started_at is not None:
+            # Master closed, draining the line.
+            depress_left = self.depressurize_remaining_seconds or 0
+            return int(depress_left + trailing_pause + future)
+
+        # Zone is running (or in unknown-latency window between sleep and
+        # the depressurize tracker being set – conservative estimate).
         current_remaining = self.remaining_zone_seconds or 0
-        gaps = len(pending_zones) * self._pause_seconds
-        return int(current_remaining + pending_seconds + gaps)
+        return int(
+            current_remaining
+            + self._depressurize_active_seconds
+            + trailing_pause
+            + future
+        )
+
+    @property
+    def phase(self) -> str:
+        if self._pause_started_at is not None:
+            return "pausing"
+        if self._depressurize_started_at is not None:
+            return "depressurizing"
+        return self._state.value
 
     @property
     def progress(self) -> dict[str, Any]:
         return {
             "state": self._state.value,
-            "phase": (
-                "pausing"
-                if self._pause_started_at is not None
-                else self._state.value
-            ),
+            "phase": self.phase,
             "current_zone": self._current_zone.name if self._current_zone else None,
             "current_zone_entity_id": (
                 self._current_zone.valve_entity_id
@@ -216,6 +271,7 @@ class Sequencer:
             "next_zone": self.next_zone.name if self.next_zone else None,
             "remaining_zone_seconds": self.remaining_zone_seconds,
             "pause_remaining_seconds": self.pause_remaining_seconds,
+            "depressurize_remaining_seconds": self.depressurize_remaining_seconds,
             "total_remaining_seconds": self.total_remaining_seconds,
             "pause_seconds": self._pause_seconds,
             "master_valve": self._master_valve,
@@ -368,7 +424,13 @@ class Sequencer:
 
                 # 5. Depressurize wait
                 if self._master_valve and self._depressurize_seconds > 0:
-                    await asyncio.sleep(self._depressurize_seconds)
+                    self._depressurize_started_at = datetime.now(timezone.utc)
+                    self._depressurize_duration_seconds = self._depressurize_seconds
+                    try:
+                        await asyncio.sleep(self._depressurize_seconds)
+                    finally:
+                        self._depressurize_started_at = None
+                        self._depressurize_duration_seconds = 0
 
                 # 6. Close zone valve (drained)
                 await zone.turn_off(self._hass)
@@ -516,4 +578,6 @@ class Sequencer:
         self._zone_started_at = None
         self._pause_started_at = None
         self._pause_duration_seconds = 0
+        self._depressurize_started_at = None
+        self._depressurize_duration_seconds = 0
         self._task = None

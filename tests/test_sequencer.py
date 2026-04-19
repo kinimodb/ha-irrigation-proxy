@@ -574,6 +574,159 @@ class TestPauseCountdown:
         assert seq._pause_duration_seconds == 0
         assert seq.pause_remaining_seconds is None
 
+    def test_total_remaining_includes_depressurize_when_master_configured(
+        self,
+    ) -> None:
+        """Idle total must include the per-zone depressurize wait."""
+        hass = make_mock_hass(
+            {f"switch.valve_{i + 1}": FakeState("off") for i in range(3)}
+        )
+        zones = _make_zones(3, duration=1)  # 3 × 60s
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=30,
+            master_valve_entity_id="switch.master",
+            depressurize_seconds=5,
+        )
+
+        # 3 zones × 60s + 3 × depressurize 5s + 2 gaps × 30s = 180 + 15 + 60 = 255
+        assert seq.total_program_seconds_idle == 255
+
+    def test_total_remaining_skips_depressurize_without_master(self) -> None:
+        """No master valve → depressurize is not effective and not counted."""
+        zones = _make_zones(3, duration=1)
+        # default _make_sequencer has no master valve
+        seq = _make_sequencer(zones=zones, pause_seconds=30)
+
+        # 3 × 60 + 0 + 2 × 30 = 240
+        assert seq.total_program_seconds_idle == 240
+
+    def test_total_remaining_during_depressurize(self) -> None:
+        """Mid-depressurize: depress_left + trailing pause + future blocks."""
+        hass = make_mock_hass(
+            {f"switch.valve_{i + 1}": FakeState("off") for i in range(3)}
+        )
+        zones = _make_zones(3, duration=1)  # 3 × 60s
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=30,
+            master_valve_entity_id="switch.master",
+            depressurize_seconds=10,
+        )
+
+        # Zone 1 done, 4s into 10s depressurize.
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._depressurize_started_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=4)
+        )
+        seq._depressurize_duration_seconds = 10
+
+        total = seq.total_remaining_seconds
+        assert total is not None
+        # depress_left(~6) + trailing pause(30) + block(Z2)=60+10+30=100 +
+        # block(Z3)=60+10+0=70 → ~206
+        assert 204 <= total <= 208
+
+    def test_total_remaining_during_zone_includes_trailing_depressurize(
+        self,
+    ) -> None:
+        """Running zone must add its own depressurize + pause to the total."""
+        hass = make_mock_hass(
+            {f"switch.valve_{i + 1}": FakeState("off") for i in range(2)}
+        )
+        zones = _make_zones(2, duration=1)  # 2 × 60s
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=20,
+            master_valve_entity_id="switch.master",
+            depressurize_seconds=5,
+        )
+
+        # 2s into Zone 1
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._current_zone = zones[0]
+        seq._zone_started_at = datetime.now(timezone.utc) - timedelta(seconds=2)
+
+        total = seq.total_remaining_seconds
+        assert total is not None
+        # zone_left(~58) + depress(5) + pause(20) + block(Z2)=60+5+0=65 → ~148
+        assert 146 <= total <= 150
+
+    def test_total_remaining_pause_after_depressurize_consistent(self) -> None:
+        """Transition depressurize → pause must not produce a value jump.
+
+        The whole point of the bug fix: switching phase shouldn't make the
+        countdown leap. Snapshot in late-depress then in early-pause for the
+        same elapsed program time and check they are within ~1s.
+        """
+        hass = make_mock_hass(
+            {f"switch.valve_{i + 1}": FakeState("off") for i in range(2)}
+        )
+        zones = _make_zones(2, duration=1)
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass,
+            zones=zones,
+            safety=safety,
+            pause_seconds=30,
+            master_valve_entity_id="switch.master",
+            depressurize_seconds=10,
+        )
+        now = datetime.now(timezone.utc)
+
+        # End of depressurize (~0s left)
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._depressurize_started_at = now - timedelta(seconds=10)
+        seq._depressurize_duration_seconds = 10
+        end_of_depress = seq.total_remaining_seconds
+
+        # Start of pause (~30s left)
+        seq._depressurize_started_at = None
+        seq._depressurize_duration_seconds = 0
+        seq._pause_started_at = now
+        seq._pause_duration_seconds = 30
+        start_of_pause = seq.total_remaining_seconds
+
+        assert end_of_depress is not None
+        assert start_of_pause is not None
+        assert abs(end_of_depress - start_of_pause) <= 1
+
+    def test_depressurize_remaining_none_when_not_active(self) -> None:
+        seq = _make_sequencer()
+        assert seq.depressurize_remaining_seconds is None
+
+    def test_progress_phase_depressurizing(self) -> None:
+        seq = _make_sequencer()
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._depressurize_started_at = datetime.now(timezone.utc)
+        seq._depressurize_duration_seconds = 5
+
+        p = seq.progress
+        assert p["phase"] == "depressurizing"
+        assert isinstance(p["depressurize_remaining_seconds"], int)
+
+    def test_depressurize_flags_cleared_on_reset(self) -> None:
+        seq = _make_sequencer()
+        seq._depressurize_started_at = datetime.now(timezone.utc)
+        seq._depressurize_duration_seconds = 5
+        seq._reset()
+        assert seq._depressurize_started_at is None
+        assert seq._depressurize_duration_seconds == 0
+        assert seq.depressurize_remaining_seconds is None
+
     @pytest.mark.asyncio
     async def test_pause_flags_cleared_on_cancel(self) -> None:
         """stop() during the inter-zone pause must clear pause tracking."""
