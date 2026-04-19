@@ -21,8 +21,8 @@
         "menu_options": {
           "basics": "Basis (Zeitplan, Hauptventil)",
           "zones": "Zonen",
-          "advanced": "Erweitert (Verzögerungen, Sicherheit)",
-          "safety": "Sicherheit (Lecksensoren)",
+          "advanced": "Erweitert (Verzögerungen, Grenzwerte)",
+          "safety": "Sicherheit",
           "save": "Speichern & schließen"
         }
       },
@@ -78,13 +78,21 @@
         }
       },
       "safety": {
-        "title": "Sicherheit – Lecksensoren",
-        "description": "Wähle die Water-Leak- und Water-Shortage-Binärsensoren, die einen sofortigen Notaus auslösen sollen. Meldet einer von ihnen 'on', wird das laufende Programm gestoppt und jedes konfigurierte Ventil (Zonen + Hauptventil) zwangsweise geschlossen.",
+        "title": "Sicherheit",
+        "description": "Konfiguriere Sicherheitsmechanismen, die das Programm stoppen und alle Ventile schließen können.",
+        "menu_options": {
+          "safety_leak_sensors": "Lecksensoren",
+          "init": "Zurück zum Hauptmenü"
+        }
+      },
+      "safety_leak_sensors": {
+        "title": "Lecksensoren",
+        "description": "Wähle die Water-Leak- und Water-Shortage-Binärsensoren, die einen sofortigen Notaus auslösen sollen. Meldet einer von ihnen 'on', wird das laufende Programm gestoppt und jedes konfigurierte Ventil (Zonen + Hauptventil) zwangsweise geschlossen. Eine persistente Benachrichtigung wird erstellt und das Event 'irrigation_proxy_leak_detected' für Automationen gefeuert.",
         "data": {
-          "leak_sensors": "Leck-/Wassermangel-Sensoren"
+          "leak_sensors": "Leck- und Wassermangel-Sensoren"
         },
         "data_description": {
-          "leak_sensors": "Bei Sonoff SWV via Zigbee2MQTT üblicherweise 'binary_sensor.sonoff_swv_*_water_leak' und 'binary_sensor.sonoff_swv_*_water_shortage'."
+          "leak_sensors": "Bei Sonoff SWV via Zigbee2MQTT üblicherweise 'binary_sensor.sonoff_swv_*_water_leak' und 'binary_sensor.sonoff_swv_*_water_shortage'. Mehrere Sensoren auswählbar; ein einzelner 'on'-Wert reicht für den Notaus."
         }
       }
     },

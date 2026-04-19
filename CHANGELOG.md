@@ -4,6 +4,29 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.8 — 2026-04-19
+
+### Changed
+- Restructure the options menu so the leak-sensor settings live in a
+  dedicated "Safety" submenu instead of a single terminal form. The
+  main menu entry is now just "Safety" (not "Safety (leak sensors)"),
+  and the submenu currently exposes one entry — "Leak sensors" — so
+  future safety features (e.g. flow-rate limits, emergency stop switch)
+  can be added without reshuffling the top-level menu.
+- Rename the advanced menu label from "Advanced (delays, safety)" to
+  "Advanced (delays, limits)" now that the safety bits have their own
+  top-level entry.
+- Rewrite the leak-sensor form copy: add an explicit description of
+  what the sensors do, how a detection propagates (stop program,
+  force-close all valves, persistent notification, bus event), and a
+  hint for the typical Sonoff SWV entity-id patterns. The field label
+  is "Leak and water-shortage sensors", not the raw `leak_sensors` key.
+
+### Safety
+- No valve-path changes in this release. The emergency-shutdown
+  behaviour introduced in v0.6.7 is unchanged; only the options-flow
+  layout and translations are updated.
+
 ## v0.6.7 — 2026-04-19
 
 ### Added
