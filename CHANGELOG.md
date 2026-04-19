@@ -4,6 +4,17 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.14 — 2026-04-19
+
+### Fixed
+- `irrigation_proxy_program_aborted` (reason: "stopped") is now fired
+  **after** the master valve and the active zone valve are confirmed
+  closed and the sequencer is back in IDLE. Previously it fired at the
+  very start of `stop()`, so automations reacting to the event would
+  still see open valves and a running sequencer.
+  The corrected sequence is: cancel task → close master → close zone →
+  cancel deadman → reset to IDLE → fire ABORTED.
+
 ## v0.6.13 — 2026-04-19
 
 ### Changed

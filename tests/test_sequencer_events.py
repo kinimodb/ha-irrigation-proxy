@@ -16,7 +16,7 @@ from custom_components.irrigation_proxy.const import (
     EVENT_ZONE_STARTED,
 )
 from custom_components.irrigation_proxy.safety import SafetyManager
-from custom_components.irrigation_proxy.sequencer import Sequencer, SequencerState
+from custom_components.irrigation_proxy.sequencer import Sequencer, SequencerState  # noqa: F401
 from custom_components.irrigation_proxy.zone import Zone
 
 from .conftest import FakeState, make_mock_hass
@@ -401,3 +401,133 @@ class TestEventSequence:
             EVENT_ZONE_COMPLETED,
             EVENT_PROGRAM_COMPLETED,
         ]
+
+    @pytest.mark.asyncio
+    async def test_aborted_event_fires_after_valve_close(self) -> None:
+        """W5: PROGRAM_ABORTED must be the last event after stop(), not the first.
+
+        Consumers (e.g. automations) that react to the aborted event must see
+        all valves already closed and the sequencer in IDLE when they handle it.
+        """
+        _real_sleep = asyncio.sleep
+
+        state_map = {"switch.valve_1": FakeState("off")}
+        hass = _make_hass_with_bus(state_map)
+
+        valve_calls: list[str] = []   # track turn_off calls
+        events_at_valve_close: list[list[str]] = []  # events fired so far at turn_off
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service == "turn_on":
+                state_map[eid] = FakeState("on")
+            elif service == "turn_off":
+                state_map[eid] = FakeState("off")
+                # Snapshot which events have fired by the time the valve closes.
+                fired_so_far = [
+                    c.args[0] for c in hass.bus.async_fire.call_args_list
+                ]
+                events_at_valve_close.append(fired_so_far)
+                valve_calls.append(eid)
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(1, duration=60)
+
+        seq = Sequencer(
+            hass=hass, zones=zones,
+            safety=SafetyManager(hass, max_runtime_minutes=60),
+            pause_seconds=0,
+        )
+
+        sleep_event = asyncio.Event()
+
+        async def _blocking_sleep(seconds):
+            if seconds >= 60:
+                await sleep_event.wait()
+            else:
+                await _real_sleep(0)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock, side_effect=_blocking_sleep):
+            await seq.start()
+            # Use the real sleep to actually yield to the event loop so the
+            # task can progress until it blocks on the 60 s zone duration.
+            await _real_sleep(0.05)
+            assert seq.state == SequencerState.RUNNING
+            await seq.stop()
+
+        # The turn_off call must have happened.
+        assert "switch.valve_1" in valve_calls
+
+        # When valve closed, ABORTED must NOT have been fired yet.
+        assert events_at_valve_close, "turn_off was never called"
+        fired_at_close = events_at_valve_close[-1]
+        assert EVENT_PROGRAM_ABORTED not in fired_at_close, (
+            "PROGRAM_ABORTED was fired before the valve closed"
+        )
+
+        # After stop() returns, ABORTED must have been fired.
+        all_fired = [c.args[0] for c in hass.bus.async_fire.call_args_list]
+        assert EVENT_PROGRAM_ABORTED in all_fired, "PROGRAM_ABORTED never fired"
+
+        # ABORTED must be the last event.
+        assert all_fired[-1] == EVENT_PROGRAM_ABORTED, (
+            f"Expected ABORTED as last event, got: {all_fired}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_sequencer_is_idle_when_aborted_fires(self) -> None:
+        """W5: sequencer must report IDLE state by the time ABORTED fires."""
+        _real_sleep = asyncio.sleep
+
+        state_map = {"switch.valve_1": FakeState("off")}
+        hass = _make_hass_with_bus(state_map)
+
+        seq_state_at_aborted: list[str] = []
+
+        original_async_fire = hass.bus.async_fire
+
+        def _track_fire(event_type, data=None):
+            if event_type == EVENT_PROGRAM_ABORTED:
+                seq_state_at_aborted.append(seq.state.value)
+            original_async_fire(event_type, data)
+
+        hass.bus.async_fire = _track_fire
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service == "turn_on":
+                state_map[eid] = FakeState("on")
+            elif service == "turn_off":
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(1, duration=60)
+
+        seq = Sequencer(
+            hass=hass, zones=zones,
+            safety=SafetyManager(hass, max_runtime_minutes=60),
+            pause_seconds=0,
+        )
+
+        sleep_event = asyncio.Event()
+
+        async def _blocking_sleep(seconds):
+            if seconds >= 60:
+                await sleep_event.wait()
+            else:
+                await _real_sleep(0)
+
+        with patch("asyncio.sleep", new_callable=AsyncMock, side_effect=_blocking_sleep):
+            await seq.start()
+            await _real_sleep(0.05)
+            assert seq.state == SequencerState.RUNNING
+            await seq.stop()
+
+        assert seq_state_at_aborted, "PROGRAM_ABORTED was never fired"
+        assert seq_state_at_aborted[0] == "idle", (
+            f"Sequencer should be IDLE when ABORTED fires, was: {seq_state_at_aborted[0]}"
+        )
