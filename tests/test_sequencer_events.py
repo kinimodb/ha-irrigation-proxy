@@ -237,6 +237,139 @@ class TestZoneEvents:
         assert started[0]["zone_name"] == "Zone 2"
 
 
+class TestCompletedZonesCounter:
+    """K3 / W4: zones_completed must reflect zones that actually ran."""
+
+    @pytest.mark.asyncio
+    async def test_skipped_zone_not_counted_as_completed(self) -> None:
+        """Zone 1 fails to open → COMPLETED must report 1 (not 2) zones."""
+        state_map = {
+            "switch.valve_1": FakeState("off"),  # stays off = fail to open
+            "switch.valve_2": FakeState("off"),
+        }
+        hass = _make_hass_with_bus(state_map)
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service == "turn_on" and eid == "switch.valve_2":
+                state_map[eid] = FakeState("on")
+            elif service == "turn_off":
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(2)
+        seq = Sequencer(
+            hass=hass, zones=zones,
+            safety=SafetyManager(hass, max_runtime_minutes=60),
+            pause_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        completed = _fired_events(hass, EVENT_PROGRAM_COMPLETED)
+        assert len(completed) == 1
+        # K3: skipped zone must NOT be counted as completed.
+        assert completed[0]["zones_completed"] == 1
+        assert completed[0]["total_zones"] == 2
+        assert completed[0]["zones_skipped"] == 1
+
+    @pytest.mark.asyncio
+    async def test_all_zones_skipped_does_not_fire_completed(self) -> None:
+        """W4: when every zone is skipped, fire ABORTED instead of COMPLETED."""
+        # Both valves stay off → both fail to verify open.
+        state_map = {
+            "switch.valve_1": FakeState("off"),
+            "switch.valve_2": FakeState("off"),
+        }
+        hass = _make_hass_with_bus(state_map)
+
+        async def _track_call(domain, service, data, **kwargs):
+            # Never flip to "on" – every open call fails verify.
+            eid = data["entity_id"]
+            if service == "turn_off":
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(2)
+        seq = Sequencer(
+            hass=hass, zones=zones,
+            safety=SafetyManager(hass, max_runtime_minutes=60),
+            pause_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        completed = _fired_events(hass, EVENT_PROGRAM_COMPLETED)
+        assert completed == [], "no COMPLETED event when nothing actually ran"
+
+        aborted = _fired_events(hass, EVENT_PROGRAM_ABORTED)
+        assert len(aborted) == 1
+        assert aborted[0]["reason"] == "all_zones_skipped"
+        assert aborted[0]["zones_completed"] == 0
+        assert aborted[0]["total_zones"] == 2
+        assert aborted[0]["zones_skipped"] == 2
+
+    @pytest.mark.asyncio
+    async def test_master_open_failure_skips_zone_in_counter(self) -> None:
+        """Master valve fails on zone 1 → zone 1 is skipped, zone 2 completes."""
+        state_map = {
+            "switch.master": FakeState("off"),  # master never opens
+            "switch.valve_1": FakeState("off"),
+            "switch.valve_2": FakeState("off"),
+        }
+        hass = _make_hass_with_bus(state_map)
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service == "turn_on":
+                # Zone valves open OK, master never does.
+                if eid != "switch.master":
+                    state_map[eid] = FakeState("on")
+            elif service == "turn_off":
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(2)
+        seq = Sequencer(
+            hass=hass, zones=zones,
+            safety=SafetyManager(hass, max_runtime_minutes=60),
+            pause_seconds=0,
+            master_valve_entity_id="switch.master",
+            depressurize_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # Both zones get skipped because master never opens for either.
+        completed = _fired_events(hass, EVENT_PROGRAM_COMPLETED)
+        assert completed == []
+
+        aborted = _fired_events(hass, EVENT_PROGRAM_ABORTED)
+        assert len(aborted) == 1
+        assert aborted[0]["reason"] == "all_zones_skipped"
+        assert aborted[0]["zones_completed"] == 0
+        assert aborted[0]["zones_skipped"] == 2
+
+        # ZONE_COMPLETED must NOT fire for skipped zones.
+        zc = _fired_events(hass, EVENT_ZONE_COMPLETED)
+        assert zc == []
+
+
 class TestEventSequence:
     """Tests for correct event ordering."""
 
