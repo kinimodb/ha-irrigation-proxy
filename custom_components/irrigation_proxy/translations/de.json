@@ -65,16 +65,16 @@
       },
       "advanced": {
         "title": "Erweitert",
-        "description": "Pause zwischen den Zonen, Entspannungszeit nach dem Hauptventil, und die Deadman-Grenze.",
+        "description": "Defaults für Pause zwischen Zonen, Druckabbau und Deadman-Grenze. Die gleichen Werte sind auch als Number-Entities im Dashboard live regelbar – Änderungen dort werden hier persistiert.",
         "data": {
           "inter_zone_delay_seconds": "Pause zwischen Zonen (Sekunden)",
           "depressurize_seconds": "Druckabbau-Pause (Sekunden)",
           "max_runtime_minutes": "Maximale Laufzeit pro Zone (Minuten)"
         },
         "data_description": {
-          "inter_zone_delay_seconds": "Wartezeit nachdem eine Zone fertig ist, bevor die nächste startet.",
-          "depressurize_seconds": "Wartezeit nach dem Schließen des Hauptventils, bevor das Zonen-Ventil schließt – damit sich der Druck sauber abbaut.",
-          "max_runtime_minutes": "Sicherheits-Deadman: Bleibt ein Ventil länger als dies offen, wird es zwangsweise geschlossen."
+          "inter_zone_delay_seconds": "Wartezeit nachdem eine Zone fertig ist, bevor die nächste startet. Wird zur Bewässerungszeit hinzugerechnet, niemals davon abgezogen.",
+          "depressurize_seconds": "Wartezeit nach dem Schließen des Hauptventils, bevor das Zonen-Ventil schließt – damit sich der Druck sauber abbaut. Wird auf die Programm-Gesamtzeit aufgeschlagen; die konfigurierte Zonen-Dauer bleibt unverändert.",
+          "max_runtime_minutes": "Sicherheits-Deadman: Bleibt ein Ventil länger als dies offen, wird es zwangsweise geschlossen. Gilt für Zonen-Ventile und den manuellen Hauptventil-Schalter."
         }
       },
       "safety": {
@@ -118,6 +118,9 @@
     "switch": {
       "program": {
         "name": "Programm"
+      },
+      "master_valve": {
+        "name": "Hauptventil"
       }
     },
     "sensor": {
@@ -125,7 +128,9 @@
         "name": "Programm-Status",
         "state": {
           "idle": "Bereit",
-          "running": "Läuft"
+          "running": "Bewässert",
+          "depressurizing": "Druckabbau",
+          "pausing": "Zonen-Pause"
         }
       },
       "current_zone": {
@@ -134,14 +139,17 @@
       "zone_time_remaining": {
         "name": "Zone Restzeit"
       },
+      "depressurize_remaining": {
+        "name": "Druckabbau Restzeit"
+      },
+      "pause_remaining": {
+        "name": "Pause Restzeit"
+      },
       "program_total_remaining": {
         "name": "Programm Restzeit"
       },
       "next_start": {
         "name": "Nächster Start"
-      },
-      "zone_duration": {
-        "name": "Zonen-Laufzeit"
       }
     },
     "number": {
@@ -153,6 +161,9 @@
       },
       "max_runtime": {
         "name": "Maximale Laufzeit"
+      },
+      "depressurize_seconds": {
+        "name": "Druckabbau-Pause"
       }
     }
   },

@@ -31,14 +31,11 @@ async def async_setup_entry(
         ProgramStatusSensor(coordinator, entry),
         CurrentZoneSensor(coordinator, entry),
         ZoneTimeRemainingSensor(coordinator, entry),
+        DepressurizeRemainingSensor(coordinator, entry),
+        PauseRemainingSensor(coordinator, entry),
         ProgramTotalRemainingSensor(coordinator, entry),
         NextStartSensor(coordinator, entry),
     ]
-
-    entities.extend(
-        ZoneDurationSensor(coordinator, entry, zone.valve_entity_id)
-        for zone in coordinator.zones
-    )
 
     async_add_entities(entities)
 
@@ -77,10 +74,10 @@ class _BaseSensor(CoordinatorEntity[IrrigationCoordinator], SensorEntity):
 
 
 class ProgramStatusSensor(_BaseSensor):
-    """Shows the sequencer state: idle / running."""
+    """Shows the active sequencer phase: idle / running / depressurizing / pausing."""
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = ["idle", "running"]
+    _attr_options = ["idle", "running", "depressurizing", "pausing"]
     _attr_icon = "mdi:sprinkler"
     _attr_translation_key = "program_status"
 
@@ -95,12 +92,14 @@ class ProgramStatusSensor(_BaseSensor):
 
     @property
     def native_value(self) -> str:
-        return self._seq_data().get("state", "idle")
+        seq = self._seq_data()
+        return seq.get("phase") or seq.get("state") or "idle"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         seq = self._seq_data()
         return {
+            "state": seq.get("state", "idle"),
             "total_zones": seq.get("total_zones", 0),
             "current_zone_index": seq.get("current_zone_index", -1),
         }
@@ -226,41 +225,45 @@ class NextStartSensor(_BaseSensor):
         return {"last_fire": sched.get("last_fire")}
 
 
-class ZoneDurationSensor(_BaseSensor):
-    """Per-zone configured duration in seconds."""
+class DepressurizeRemainingSensor(_BaseSensor):
+    """Seconds left in the current master-valve drain phase (None otherwise)."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
-    _attr_icon = "mdi:timer-cog-outline"
-    _attr_translation_key = "zone_duration"
+    _attr_icon = "mdi:water-pump-off"
+    _attr_translation_key = "depressurize_remaining"
 
     def __init__(
         self,
         coordinator: IrrigationCoordinator,
         entry: ConfigEntry,
-        valve_entity_id: str,
     ) -> None:
         super().__init__(coordinator, entry)
-        self._valve_entity_id = valve_entity_id
-        zone = coordinator.zones_by_valve[valve_entity_id]
-        self._attr_unique_id = (
-            f"{entry.entry_id}_{valve_entity_id}_duration"
-        )
-        self._attr_name = f"{zone.name} Duration"
+        self._attr_unique_id = f"{entry.entry_id}_depressurize_remaining"
+        self._attr_name = "Depressurize Remaining"
 
     @property
-    def native_value(self) -> int:
-        zone = self.coordinator.zones_by_valve.get(self._valve_entity_id)
-        if zone is None:
-            return 0
-        return zone.duration_seconds
+    def native_value(self) -> int | None:
+        return self._seq_data().get("depressurize_remaining_seconds")
+
+
+class PauseRemainingSensor(_BaseSensor):
+    """Seconds left in the current inter-zone pause (None otherwise)."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = "s"
+    _attr_icon = "mdi:timer-pause"
+    _attr_translation_key = "pause_remaining"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_pause_remaining"
+        self._attr_name = "Pause Remaining"
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        zone = self.coordinator.zones_by_valve.get(self._valve_entity_id)
-        if zone is None:
-            return {}
-        return {
-            "duration_minutes": zone.duration_minutes,
-            "valve_entity_id": self._valve_entity_id,
-        }
+    def native_value(self) -> int | None:
+        return self._seq_data().get("pause_remaining_seconds")

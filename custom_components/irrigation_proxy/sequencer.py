@@ -114,6 +114,10 @@ class Sequencer:
     def depressurize_seconds(self) -> int:
         return self._depressurize_seconds
 
+    @depressurize_seconds.setter
+    def depressurize_seconds(self, value: int) -> None:
+        self._depressurize_seconds = max(0, int(value))
+
     @property
     def zones(self) -> list[Zone]:
         """List of configured zones (read-only snapshot)."""
@@ -373,7 +377,10 @@ class Sequencer:
             for i, zone in enumerate(self._zones):
                 self._current_index = i
                 self._current_zone = zone
-                self._zone_started_at = datetime.now(timezone.utc)
+                # _zone_started_at is set later, right before the actual
+                # duration sleep – so the user-visible countdown starts
+                # exactly when water flows, not during Zigbee verify latency.
+                self._zone_started_at = None
 
                 _LOGGER.info(
                     "Sequencer: starting zone %d/%d '%s' for %ds",
@@ -441,8 +448,17 @@ class Sequencer:
                     self._safety.cancel_deadman(zone.valve_entity_id)
                     continue
 
-                # 3. Wait the configured duration
-                await asyncio.sleep(zone.duration_seconds)
+                # 3. Wait the configured duration. Start the user-visible
+                # zone countdown exactly here so it aligns with the actual
+                # water-flow window (not with the open/verify latency above).
+                self._zone_started_at = datetime.now(timezone.utc)
+                try:
+                    await asyncio.sleep(zone.duration_seconds)
+                finally:
+                    # Clear so remaining_zone_seconds returns None during
+                    # the depressurize phase – the user sees the dedicated
+                    # depressurize countdown instead of a stuck "0".
+                    self._zone_started_at = None
 
                 # 4. Close master (stop flow)
                 await self._close_master()

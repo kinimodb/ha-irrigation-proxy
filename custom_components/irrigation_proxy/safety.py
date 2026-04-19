@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,12 @@ class SafetyManager:
         self._max_runtime_seconds = max_runtime_minutes * 60
         self._timers: dict[str, asyncio.TimerHandle] = {}
         self._zone_start_times: dict[str, datetime] = {}
+        # Separate registry for the master valve's manual-override deadman.
+        # Independent from zone timers so it can fire even when no zone is
+        # tracked (e.g. user opened the master alone for a maintenance test).
+        self._master_timer: asyncio.TimerHandle | None = None
+        self._master_start_time: datetime | None = None
+        self._master_entity_id: str | None = None
 
     @property
     def zone_start_times(self) -> dict[str, datetime]:
@@ -151,3 +158,75 @@ class SafetyManager:
         await zone.force_close(self._hass)
         self._timers.pop(zone.valve_entity_id, None)
         self._zone_start_times.pop(zone.valve_entity_id, None)
+
+    # -- Master valve manual-override deadman ---------------------------
+
+    def start_master_deadman(
+        self,
+        entity_id: str,
+        on_expired: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Arm a deadman for a manually-opened master valve.
+
+        Independent from zone timers because the master can be opened
+        without any zone being tracked (maintenance / line bleed). Uses
+        the same max_runtime budget as zones so users have one knob.
+        """
+        self.cancel_master_deadman()
+
+        timeout = self._max_runtime_seconds + DEFAULT_SAFETY_MARGIN_SECONDS
+        _LOGGER.info(
+            "Safety: master deadman started for '%s' (%ds)",
+            entity_id,
+            timeout,
+        )
+        self._master_entity_id = entity_id
+        self._master_start_time = datetime.now(timezone.utc)
+
+        def _fire() -> None:
+            self._hass.async_create_task(
+                self._master_deadman_expired(on_expired),
+                f"irrigation_proxy_master_deadman_{entity_id}",
+            )
+
+        self._master_timer = self._hass.loop.call_later(timeout, _fire)
+
+    def cancel_master_deadman(self) -> None:
+        """Cancel the master-valve deadman timer."""
+        if self._master_timer is not None:
+            self._master_timer.cancel()
+            _LOGGER.debug("Safety: master deadman cancelled")
+        self._master_timer = None
+        self._master_start_time = None
+        self._master_entity_id = None
+
+    def master_remaining_seconds(self) -> int | None:
+        """Seconds left on the master deadman, or None if not armed."""
+        if self._master_start_time is None:
+            return None
+        elapsed = (
+            datetime.now(timezone.utc) - self._master_start_time
+        ).total_seconds()
+        remaining = (
+            self._max_runtime_seconds + DEFAULT_SAFETY_MARGIN_SECONDS - elapsed
+        )
+        return max(0, int(remaining))
+
+    async def _master_deadman_expired(
+        self, on_expired: Callable[[], Awaitable[None]]
+    ) -> None:
+        entity_id = self._master_entity_id or "<unknown>"
+        _LOGGER.warning(
+            "Safety: MASTER DEADMAN EXPIRED for '%s' – forcing close!",
+            entity_id,
+        )
+        try:
+            await on_expired()
+        except Exception:  # noqa: BLE001 – defensive
+            _LOGGER.exception(
+                "Safety: master deadman close callback failed for %s",
+                entity_id,
+            )
+        self._master_timer = None
+        self._master_start_time = None
+        self._master_entity_id = None

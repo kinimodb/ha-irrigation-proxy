@@ -60,6 +60,10 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._state_change_unsub: Callable[[], None] | None = None
         self._leak_unsub: Callable[[], None] | None = None
         self._leak_emergency_active: bool = False
+        # Set by Number entity setters before they call async_update_entry,
+        # so the options-update listener can skip the disruptive reload
+        # when only a live-tunable parameter changed.
+        self.suppress_next_reload: bool = False
 
     # -- Lookup helpers -------------------------------------------------
 
