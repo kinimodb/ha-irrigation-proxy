@@ -4,6 +4,22 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.13 — 2026-04-19
+
+### Changed
+- `start_program` and `stop_program` services now accept an optional
+  `entry_id` field. When supplied, the service targets only the matching
+  config entry instead of broadcasting to every configured program.
+  This is the correct behaviour when multiple irrigation programs are
+  set up in one HA instance.
+- Without `entry_id` the legacy broadcast behaviour is preserved for
+  backwards compatibility, but now emits a `WARNING`-level log when
+  more than one entry exists. The broadcast fallback will become a
+  hard error in v0.7 — users with multiple programs should add
+  `entry_id` to their automations/scripts now.
+- Updated `services.yaml` with field description and UI selector for
+  `entry_id` on both services.
+
 ## v0.6.12 — 2026-04-19
 
 ### Fixed

@@ -3,9 +3,37 @@ start_program:
   description: >-
     Start the configured irrigation program. Runs all zones sequentially
     with their configured durations. No-op if already running.
+    When multiple config entries (programs) are set up, supply `entry_id`
+    to target one; omitting it starts ALL programs (deprecated behaviour,
+    will become an error in v0.7).
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: >-
+        ID of the irrigation_proxy config entry to start. Find it in
+        Settings → Devices & Services → Irrigation Proxy → ⋮ → Entry ID.
+        Omitting this field starts every configured program (deprecated).
+      required: false
+      example: "abc123def456"
+      selector:
+        text:
 
 stop_program:
   name: Stop Irrigation Program
   description: >-
     Stop the running irrigation program immediately. Closes the active
     valve and cancels all remaining zones.
+    When multiple config entries (programs) are set up, supply `entry_id`
+    to target one; omitting it stops ALL programs (deprecated behaviour,
+    will become an error in v0.7).
+  fields:
+    entry_id:
+      name: Config Entry ID
+      description: >-
+        ID of the irrigation_proxy config entry to stop. Find it in
+        Settings → Devices & Services → Irrigation Proxy → ⋮ → Entry ID.
+        Omitting this field stops every configured program (deprecated).
+      required: false
+      example: "abc123def456"
+      selector:
+        text:
