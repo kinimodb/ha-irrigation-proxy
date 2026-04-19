@@ -65,16 +65,16 @@
       },
       "advanced": {
         "title": "Advanced",
-        "description": "Inter-zone pause, master-valve drain delay and the deadman-timer limit.",
+        "description": "Defaults for the inter-zone pause, master-valve drain delay and the deadman-timer limit. These same values are also exposed as Number entities on the dashboard – live tweaks there persist back to these fields.",
         "data": {
           "inter_zone_delay_seconds": "Delay between zones (seconds)",
           "depressurize_seconds": "Depressurize delay (seconds)",
           "max_runtime_minutes": "Maximum runtime per zone (minutes)"
         },
         "data_description": {
-          "inter_zone_delay_seconds": "Pause after a zone finishes before the next zone starts.",
-          "depressurize_seconds": "Wait after closing the master valve before closing the zone valve – lets pressure drain safely.",
-          "max_runtime_minutes": "Safety deadman: if a valve stays open longer than this, it is force-closed."
+          "inter_zone_delay_seconds": "Pause after a zone finishes before the next zone starts. Counted on top of the irrigation time, never deducted from it.",
+          "depressurize_seconds": "Wait after closing the master valve before closing the zone valve – lets pressure drain safely. Added to the program total; the configured zone duration is unchanged.",
+          "max_runtime_minutes": "Safety deadman: if a valve stays open longer than this, it is force-closed. Applies to zone valves and the manual master-valve switch."
         }
       },
       "safety": {
@@ -118,6 +118,9 @@
     "switch": {
       "program": {
         "name": "Program"
+      },
+      "master_valve": {
+        "name": "Master Valve"
       }
     },
     "sensor": {
@@ -125,7 +128,9 @@
         "name": "Program Status",
         "state": {
           "idle": "Idle",
-          "running": "Running"
+          "running": "Watering",
+          "depressurizing": "Depressurizing",
+          "pausing": "Inter-zone pause"
         }
       },
       "current_zone": {
@@ -134,14 +139,17 @@
       "zone_time_remaining": {
         "name": "Zone Time Remaining"
       },
+      "depressurize_remaining": {
+        "name": "Depressurize Remaining"
+      },
+      "pause_remaining": {
+        "name": "Pause Remaining"
+      },
       "program_total_remaining": {
         "name": "Program Total Remaining"
       },
       "next_start": {
         "name": "Next Scheduled Start"
-      },
-      "zone_duration": {
-        "name": "Zone Duration"
       }
     },
     "number": {
@@ -153,6 +161,9 @@
       },
       "max_runtime": {
         "name": "Max Runtime"
+      },
+      "depressurize_seconds": {
+        "name": "Depressurize Delay"
       }
     }
   },

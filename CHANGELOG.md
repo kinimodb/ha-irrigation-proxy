@@ -4,6 +4,68 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.7.0 — 2026-04-19
+
+### Added
+- New **Master Valve** switch entity that lets the user manually open and
+  close the configured master/pump valve from the dashboard for
+  maintenance, line-bleeding or testing. The switch is only registered
+  when a master valve is configured. Manual opens arm an independent
+  master deadman timer (same budget as the per-zone deadman) so a
+  forgotten test cannot leave the line under pressure.
+- New **Depressurize Delay** number entity – live-tunable from the
+  dashboard, persists to the config entry. Mirrors the value previously
+  only reachable through the options flow.
+- New sensor **Depressurize Remaining** (seconds left in the current
+  master-valve drain phase, `unknown` outside of it).
+- New sensor **Pause Remaining** (seconds left in the current inter-zone
+  pause, `unknown` outside of it).
+- `Program Status` sensor now distinguishes the four phases
+  `idle`, `running`, `depressurizing`, `pausing` so dashboards and
+  automations can react to the exact phase instead of guessing from
+  remaining-second sensors.
+
+### Changed
+- All number entities now use HA's `BOX` input mode (precise number
+  entry) instead of the slider. Easier to dial in exact values like
+  `17` minutes.
+- Number entity changes (zone duration, inter-zone delay, max runtime,
+  depressurize delay) now **persist** to the config entry, so
+  dashboard tweaks survive a Home Assistant restart. The persistence
+  path skips the usual options-flow reload so it does not abort a
+  running program.
+- Zone countdown (`Zone Time Remaining`) now starts exactly when the
+  zone's water-flow sleep starts, instead of when we issue the
+  `turn_on` service call. Previously the Zigbee verify window (up to
+  5 s for the zone valve plus up to 5 s for the master valve) was
+  silently subtracted from the displayed countdown, so a configured
+  3 min zone could appear to drop to 2:50 before water actually
+  flowed. The countdown now matches the actual irrigation time and
+  returns to `unknown` during depressurize and pause phases.
+- Options flow `Advanced` step description clarifies that the values
+  are live-tunable as Number entities and that the depressurize delay
+  is *added* to the program's total runtime, never deducted from a
+  zone's configured duration.
+
+### Removed
+- **BREAKING:** `sensor.<program>_zone_duration` (read-only mirror of
+  the per-zone duration) is gone. The same value is already exposed –
+  and editable – as the `Zone Duration` Number entity, so the sensor
+  was redundant. Dashboards or automations that referenced the sensor
+  must switch to `number.<program>_<zone>_duration` (its `state` field
+  carries the same minute value).
+
+  **Migration:** delete the stale sensor reference from any Lovelace
+  card / automation and replace it with the matching Number entity.
+
+### Safety
+- Master valve manual open arms a dedicated deadman timer; cancelled
+  on manual close. The same `Max Runtime` budget applies as for zones
+  so users have one safety knob.
+- Manual master-valve toggling is refused while the program sequencer
+  is running (raises a `HomeAssistantError` with a clear message). The
+  sequencer owns the valve during a run.
+
 ## v0.6.14 — 2026-04-19
 
 ### Fixed

@@ -8,12 +8,14 @@ from typing import Any
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_NAME, DOMAIN
 from .coordinator import IrrigationCoordinator
+from .sequencer import SequencerState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +33,8 @@ async def async_setup_entry(
         ZoneSwitch(coordinator, entry, zone.valve_entity_id)
         for zone in coordinator.zones
     )
+    if coordinator.sequencer.master_valve:
+        entities.append(MasterValveSwitch(coordinator, entry))
     async_add_entities(entities)
 
 
@@ -183,4 +187,105 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
             )
             await self._zone.turn_off(self.hass)
             self.coordinator.safety.cancel_deadman(self._valve_entity_id)
+        await super().async_will_remove_from_hass()
+
+
+class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+    """Manual override for the master / pump valve.
+
+    Mirrors the underlying valve state so the user can confirm the actual
+    line state at a glance. Manual toggling is only allowed while the
+    sequencer is idle – during a program run the sequencer owns the valve.
+    Every manual open arms a deadman so a forgotten test cannot leave the
+    line under pressure indefinitely.
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.SWITCH
+    _attr_icon = "mdi:water-pump"
+    _attr_translation_key = "master_valve"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._master_entity_id = coordinator.sequencer.master_valve or ""
+        self._attr_unique_id = f"{entry.entry_id}_master_valve"
+        self._attr_name = "Master Valve"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name=self._entry.data.get(CONF_NAME, "Irrigation"),
+            manufacturer="Irrigation Proxy",
+            model="Virtual Irrigation Controller",
+        )
+
+    @property
+    def is_on(self) -> bool | None:
+        if not self._master_entity_id:
+            return None
+        ha_state = (
+            self.hass.states.get(self._master_entity_id) if self.hass else None
+        )
+        if ha_state is None:
+            return None
+        return ha_state.state in ("on", "open")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "master_entity_id": self._master_entity_id,
+            "deadman_remaining_seconds": (
+                self.coordinator.safety.master_remaining_seconds()
+            ),
+        }
+
+    def _refuse_if_program_running(self) -> None:
+        if self.coordinator.sequencer.state == SequencerState.RUNNING:
+            raise HomeAssistantError(
+                "Cannot toggle the master valve manually while a program "
+                "is running – stop the program first."
+            )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._refuse_if_program_running()
+
+        result = await self.coordinator.sequencer._open_master()
+        if result is False:
+            raise HomeAssistantError(
+                f"Master valve {self._master_entity_id} did not verify open."
+            )
+
+        async def _close_on_deadman() -> None:
+            await self.coordinator.sequencer._close_master()
+            await self.coordinator.async_request_refresh()
+
+        self.coordinator.safety.start_master_deadman(
+            self._master_entity_id, _close_on_deadman
+        )
+        await self.coordinator.async_request_refresh()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._refuse_if_program_running()
+        self.coordinator.safety.cancel_master_deadman()
+        await self.coordinator.sequencer._close_master()
+        await self.coordinator.async_request_refresh()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self.is_on:
+            _LOGGER.info(
+                "Master valve switch removed while open – closing valve"
+            )
+            self.coordinator.safety.cancel_master_deadman()
+            try:
+                await self.coordinator.sequencer._close_master()
+            except Exception:
+                _LOGGER.exception(
+                    "Master valve switch: failed to close master on remove"
+                )
         await super().async_will_remove_from_hass()

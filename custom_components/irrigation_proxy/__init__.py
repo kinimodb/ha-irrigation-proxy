@@ -297,5 +297,18 @@ def _async_register_services(hass: HomeAssistant) -> None:
 async def _async_options_updated(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> None:
-    """Reload the config entry when options change."""
+    """Reload the config entry when options change.
+
+    Number entities persist their changes by writing to ``entry.data`` and
+    set ``coordinator.suppress_next_reload`` so we can skip the reload
+    here – the live coordinator already holds the new value, and a reload
+    would tear down a running program.
+    """
+    coordinator: IrrigationCoordinator | None = hass.data.get(
+        DOMAIN, {}
+    ).get(entry.entry_id)
+    if coordinator is not None and coordinator.suppress_next_reload:
+        coordinator.suppress_next_reload = False
+        return
+
     await hass.config_entries.async_reload(entry.entry_id)
