@@ -4,6 +4,21 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.3 — 2026-04-19
+
+### Fixed
+- Fix zone valve entity picker in the options flow: change the valve field from
+  `vol.Required` to `vol.Optional` with `description={"suggested_value": ...}`,
+  matching the pattern used by HA's frontend for entity selectors. Previously
+  the entity picker rendered but submitted an empty value, triggering the
+  "valve_required" error on every attempt. The fix aligns both the
+  "Add zone" and "Edit zone" steps with the working master-valve field pattern.
+- Fix `voluptuous.Optional` and `voluptuous.Invalid` missing from the test
+  mock in `conftest.py`; all 119 unit tests now pass.
+
+### Safety
+- No valve-path changes in this release.
+
 ## v0.6.2 — 2026-04-16
 
 ### Fixed
