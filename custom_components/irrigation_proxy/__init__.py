@@ -237,19 +237,52 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _async_register_services(hass: HomeAssistant) -> None:
     """Register domain-level services."""
 
+    def _target_coordinators(
+        call: ServiceCall,
+    ) -> list[tuple[str, "IrrigationCoordinator"]]:
+        """Return the list of (entry_id, coordinator) pairs to act on.
+
+        If the caller supplied entry_id we act on that one entry only.
+        Without entry_id we fall back to acting on every entry (legacy
+        behaviour) and emit a deprecation warning so users can migrate
+        before the fallback is removed in v0.7.
+        """
+        all_entries: dict = hass.data.get(DOMAIN, {})
+        requested_id: str | None = call.data.get("entry_id")
+
+        if requested_id:
+            coord = all_entries.get(requested_id)
+            if not isinstance(coord, IrrigationCoordinator):
+                _LOGGER.warning(
+                    "Service: entry_id %r not found or not an IrrigationCoordinator",
+                    requested_id,
+                )
+                return []
+            return [(requested_id, coord)]
+
+        # Legacy broadcast: act on all entries.
+        if len(all_entries) > 1:
+            _LOGGER.warning(
+                "Service called without entry_id – targeting ALL %d irrigation "
+                "entries. This behaviour is deprecated and will become an error "
+                "in v0.7. Pass 'entry_id' to target a specific program.",
+                len(all_entries),
+            )
+        return [
+            (eid, c)
+            for eid, c in all_entries.items()
+            if isinstance(c, IrrigationCoordinator)
+        ]
+
     async def _handle_start_program(call: ServiceCall) -> None:
-        for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
-            if not isinstance(coordinator, IrrigationCoordinator):
-                continue
+        for entry_id, coordinator in _target_coordinators(call):
             _LOGGER.info("Service: starting program for entry %s", entry_id)
             await coordinator.sequencer.start()
             coordinator.notify_sequencer_state_changed()
             await coordinator.async_request_refresh()
 
     async def _handle_stop_program(call: ServiceCall) -> None:
-        for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
-            if not isinstance(coordinator, IrrigationCoordinator):
-                continue
+        for entry_id, coordinator in _target_coordinators(call):
             _LOGGER.info("Service: stopping program for entry %s", entry_id)
             await coordinator.sequencer.stop()
             coordinator.notify_sequencer_state_changed()
