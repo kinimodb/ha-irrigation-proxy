@@ -140,10 +140,10 @@
         "name": "Zone Time Remaining"
       },
       "depressurize_remaining": {
-        "name": "Depressurize Remaining"
+        "name": "Depressurize Total Remaining"
       },
       "pause_remaining": {
-        "name": "Pause Remaining"
+        "name": "Pauses Total Remaining"
       },
       "program_total_remaining": {
         "name": "Program Total Remaining"

@@ -255,6 +255,97 @@ class Sequencer:
         )
 
     @property
+    def zones_total_remaining_seconds(self) -> int:
+        """Sum of actual watering time still to come in the program.
+
+        Idle: full runtime of every configured zone. Running: time left on
+        the current zone plus the full duration of every later zone. Stays
+        at 0 once the last zone finishes watering (depressurize / pause
+        phases don't add to this).
+        """
+        if self._state == SequencerState.IDLE:
+            return sum(z.duration_seconds for z in self._zones)
+
+        if self._current_index < 0:
+            return 0
+
+        idx = self._current_index
+        if idx >= len(self._zones):
+            return 0
+
+        future_zone_time = sum(
+            z.duration_seconds for z in self._zones[idx + 1 :]
+        )
+
+        if (
+            self._pause_started_at is not None
+            or self._depressurize_started_at is not None
+        ):
+            # Current zone already finished watering; only future zones count.
+            return int(future_zone_time)
+
+        current_remaining = self.remaining_zone_seconds or 0
+        return int(current_remaining + future_zone_time)
+
+    @property
+    def pauses_total_remaining_seconds(self) -> int:
+        """Sum of every inter-zone pause still to come in the program."""
+        n = len(self._zones)
+        if n <= 1:
+            return 0
+
+        if self._state == SequencerState.IDLE:
+            return (n - 1) * self._pause_seconds
+
+        if self._current_index < 0:
+            return 0
+
+        idx = self._current_index
+
+        if self._pause_started_at is not None:
+            # Currently in the pause between idx and idx+1 – count it + any
+            # further pauses after later zones.
+            current_pause = self.pause_remaining_seconds or 0
+            future_pause_count = max(0, n - 2 - idx)
+            return int(current_pause + future_pause_count * self._pause_seconds)
+
+        # Zone phase or depressurize phase at idx: the pause after the
+        # current zone is still ahead, plus every later zone's pause.
+        future_pause_count = max(0, n - 1 - idx)
+        return future_pause_count * self._pause_seconds
+
+    @property
+    def depressurize_total_remaining_seconds(self) -> int:
+        """Sum of every master-valve drain wait still to come in the program."""
+        per_zone = self._depressurize_active_seconds
+        if per_zone == 0 or not self._zones:
+            return 0
+
+        if self._state == SequencerState.IDLE:
+            return len(self._zones) * per_zone
+
+        if self._current_index < 0:
+            return 0
+
+        idx = self._current_index
+        n = len(self._zones)
+
+        if self._depressurize_started_at is not None:
+            # Currently draining after zone idx – count it + every later zone.
+            current_depress = self.depressurize_remaining_seconds or 0
+            future_count = max(0, n - 1 - idx)
+            return int(current_depress + future_count * per_zone)
+
+        if self._pause_started_at is not None:
+            # Drain for zone idx already finished; only later zones' drains.
+            future_count = max(0, n - 1 - idx)
+            return future_count * per_zone
+
+        # Zone phase at idx: drain for current zone + every later zone.
+        future_count = max(0, n - idx)
+        return future_count * per_zone
+
+    @property
     def phase(self) -> str:
         if self._pause_started_at is not None:
             return "pausing"
@@ -280,6 +371,11 @@ class Sequencer:
             "pause_remaining_seconds": self.pause_remaining_seconds,
             "depressurize_remaining_seconds": self.depressurize_remaining_seconds,
             "total_remaining_seconds": self.total_remaining_seconds,
+            "zones_total_remaining_seconds": self.zones_total_remaining_seconds,
+            "pauses_total_remaining_seconds": self.pauses_total_remaining_seconds,
+            "depressurize_total_remaining_seconds": (
+                self.depressurize_total_remaining_seconds
+            ),
             "pause_seconds": self._pause_seconds,
             "master_valve": self._master_valve,
             "depressurize_seconds": self._depressurize_seconds,

@@ -202,7 +202,14 @@ class ProgramTotalRemainingSensor(_BaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         seq = self._seq_data()
+        # Breakdown so users can trace how the total is composed:
+        #   total ≈ zones_remaining + pauses_remaining + depressurize_remaining
         return {
+            "zones_remaining_seconds": seq.get("zones_total_remaining_seconds"),
+            "pauses_remaining_seconds": seq.get("pauses_total_remaining_seconds"),
+            "depressurize_remaining_seconds": (
+                seq.get("depressurize_total_remaining_seconds")
+            ),
             "inter_zone_delay_seconds": seq.get("pause_seconds"),
             "depressurize_seconds": seq.get("depressurize_seconds"),
             "master_valve": seq.get("master_valve"),
@@ -242,7 +249,7 @@ class NextStartSensor(_BaseSensor):
 
 
 class DepressurizeRemainingSensor(_BaseSensor):
-    """Seconds left in the current master-valve drain phase (None otherwise)."""
+    """Sum of master-valve drain time still ahead in the program."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
@@ -256,22 +263,24 @@ class DepressurizeRemainingSensor(_BaseSensor):
     ) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_depressurize_remaining"
-        self._attr_name = "Depressurize Remaining"
+        self._attr_name = "Depressurize Total Remaining"
 
     @property
     def native_value(self) -> int | None:
+        return int(self._seq_data().get("depressurize_total_remaining_seconds") or 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
         seq = self._seq_data()
-        if seq.get("state") == "running":
-            remaining = seq.get("depressurize_remaining_seconds")
-            return 0 if remaining is None else remaining
-        # Idle preview – 0 without a master valve since the phase never runs.
-        if not seq.get("master_valve"):
-            return 0
-        return int(seq.get("depressurize_seconds") or 0)
+        return {
+            "current_phase_remaining_seconds": (
+                seq.get("depressurize_remaining_seconds")
+            ),
+        }
 
 
 class PauseRemainingSensor(_BaseSensor):
-    """Seconds left in the current inter-zone pause (None otherwise)."""
+    """Sum of inter-zone pause time still ahead in the program."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
@@ -285,12 +294,15 @@ class PauseRemainingSensor(_BaseSensor):
     ) -> None:
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_pause_remaining"
-        self._attr_name = "Pause Remaining"
+        self._attr_name = "Pauses Total Remaining"
 
     @property
     def native_value(self) -> int | None:
+        return int(self._seq_data().get("pauses_total_remaining_seconds") or 0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
         seq = self._seq_data()
-        if seq.get("state") == "running":
-            remaining = seq.get("pause_remaining_seconds")
-            return 0 if remaining is None else remaining
-        return int(seq.get("pause_seconds") or 0)
+        return {
+            "current_phase_remaining_seconds": seq.get("pause_remaining_seconds"),
+        }
