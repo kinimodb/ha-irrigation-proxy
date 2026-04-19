@@ -328,15 +328,9 @@ class Sequencer:
 
         _LOGGER.info("Sequencer: stopping program")
 
+        # Capture before _reset() clears them.
         zone_to_close = self._current_zone
-        self._hass.bus.async_fire(
-            EVENT_PROGRAM_ABORTED,
-            {
-                "reason": "stopped",
-                "zone_name": zone_to_close.name if zone_to_close else None,
-                "zone_index": self._current_index,
-            },
-        )
+        zone_index = self._current_index
 
         # Cancel the task
         if self._task is not None and not self._task.done():
@@ -359,6 +353,17 @@ class Sequencer:
             self._safety.cancel_deadman(zone_to_close.valve_entity_id)
 
         self._reset()
+
+        # Fire ABORTED after valves are closed and state is reset so
+        # consumers see the sequencer already in IDLE with closed valves.
+        self._hass.bus.async_fire(
+            EVENT_PROGRAM_ABORTED,
+            {
+                "reason": "stopped",
+                "zone_name": zone_to_close.name if zone_to_close else None,
+                "zone_index": zone_index,
+            },
+        )
 
     # -- Internal -------------------------------------------------------
 
