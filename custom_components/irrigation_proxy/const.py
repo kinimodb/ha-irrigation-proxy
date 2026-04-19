@@ -79,6 +79,7 @@ EVENT_ZONE_STARTED: Final = f"{DOMAIN}_zone_started"
 EVENT_ZONE_COMPLETED: Final = f"{DOMAIN}_zone_completed"
 EVENT_ZONE_ERROR: Final = f"{DOMAIN}_zone_error"
 EVENT_LEAK_DETECTED: Final = f"{DOMAIN}_leak_detected"
+EVENT_MASTER_CLOSE_FAILED: Final = f"{DOMAIN}_master_close_failed"
 
 # -- Service names ---------------------------------------------------------
 
