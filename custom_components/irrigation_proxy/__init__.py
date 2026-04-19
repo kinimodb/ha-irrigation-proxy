@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import Event, HomeAssistant, ServiceCall
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_DEPRESSURIZE_SECONDS,
@@ -106,6 +107,26 @@ async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) ->
     return True
 
 
+def _purge_stale_entities(
+    hass: HomeAssistant, entry: ConfigEntry, zones: list[Zone]
+) -> None:
+    """Remove entities whose unique_ids no longer map to a current platform entity."""
+    registry = er.async_get(hass)
+    # v0.7.0: ZoneDurationSensor (sensor.<zone>_duration) dropped.
+    stale_unique_ids = [
+        f"{entry.entry_id}_{zone.valve_entity_id}_duration" for zone in zones
+    ]
+    for unique_id in stale_unique_ids:
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+        if entity_id:
+            _LOGGER.info(
+                "Irrigation Proxy: removing stale entity %s (unique_id=%s)",
+                entity_id,
+                unique_id,
+            )
+            registry.async_remove(entity_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Irrigation Proxy from a config entry."""
     raw = {**entry.data, **entry.options}
@@ -131,6 +152,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     ]
 
     zones = _build_zones(raw)
+
+    # v0.7.0 removed the per-zone "<zone> Duration" sensor in favour of the
+    # Number entity. Old registry entries stay behind as "unavailable" until
+    # we actively purge them here.
+    _purge_stale_entities(hass, entry, zones)
 
     # Safety: close all valves (zones + master) on startup for crash recovery.
     safety = SafetyManager(hass, max_runtime)

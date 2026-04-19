@@ -159,6 +159,8 @@ class InterZoneDelayNumber(_BaseNumber):
     _attr_device_class = NumberDeviceClass.DURATION
     _attr_icon = "mdi:timer-pause"
     _attr_translation_key = "inter_zone_delay"
+    # Install-time value, not a daily knob – keep off the dashboard by default.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
@@ -196,6 +198,8 @@ class MaxRuntimeNumber(_BaseNumber):
     _attr_device_class = NumberDeviceClass.DURATION
     _attr_icon = "mdi:shield-alert-outline"
     _attr_translation_key = "max_runtime"
+    # Safety ceiling – deliberately kept out of easy reach on dashboards.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
@@ -233,6 +237,8 @@ class DepressurizeSecondsNumber(_BaseNumber):
     _attr_device_class = NumberDeviceClass.DURATION
     _attr_icon = "mdi:water-pump-off"
     _attr_translation_key = "depressurize_seconds"
+    # Install-time plumbing value, not a daily knob – off the dashboard by default.
+    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
