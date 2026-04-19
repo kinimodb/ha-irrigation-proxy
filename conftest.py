@@ -200,6 +200,8 @@ if not _HA_AVAILABLE:
         vol_mod = _make_module("voluptuous")
         vol_mod.Schema = MagicMock  # type: ignore[attr-defined]
         vol_mod.Required = MagicMock  # type: ignore[attr-defined]
+        vol_mod.Optional = MagicMock  # type: ignore[attr-defined]
+        vol_mod.Invalid = Exception  # type: ignore[attr-defined]
 
     # Register all mocked modules
     sys.modules.update(_MOCKED_MODULES)

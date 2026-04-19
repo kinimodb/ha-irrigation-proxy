@@ -119,12 +119,7 @@ def _weekday_field() -> Any:
 
 
 def _switch_entity_field() -> Any:
-    # No domain filter: accepts switch.*, valve.*, or any other entity type.
-    # Restricting to domain=["switch","valve"] breaks on HA versions that don't
-    # support a list for the domain field (pre-2022.9). Z2M exposes Sonoff SWV
-    # as switch.* entities; ZHA and native valve platform use valve.* – omitting
-    # the filter keeps all setups working without HA-version gating.
-    return selector.EntitySelector(selector.EntitySelectorConfig(multiple=False))
+    return selector.EntitySelector(selector.EntitySelectorConfig())
 
 
 def _validate_start_times(raw: str | list[str] | None) -> list[str]:
@@ -333,7 +328,10 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Optional(CONF_ZONE_NAME, default=""): str,
-                    vol.Required(CONF_ZONE_VALVE): _switch_entity_field(),
+                    vol.Optional(
+                        CONF_ZONE_VALVE,
+                        description={"suggested_value": ""},
+                    ): _switch_entity_field(),
                     vol.Required(
                         CONF_ZONE_DURATION_MINUTES,
                         default=DEFAULT_DURATION_MINUTES,
@@ -400,9 +398,9 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                         CONF_ZONE_NAME,
                         default=zone.get(CONF_ZONE_NAME, ""),
                     ): str,
-                    vol.Required(
+                    vol.Optional(
                         CONF_ZONE_VALVE,
-                        default=zone.get(CONF_ZONE_VALVE),
+                        description={"suggested_value": zone.get(CONF_ZONE_VALVE) or ""},
                     ): _switch_entity_field(),
                     vol.Required(
                         CONF_ZONE_DURATION_MINUTES,
