@@ -446,3 +446,180 @@ class TestSafetyIntegration:
         # call_later sollte für jede Zone aufgerufen worden sein
         # (2 Zonen = 2 start_deadman Aufrufe)
         assert hass.loop.call_later.call_count == 2
+
+
+class TestPauseCountdown:
+    """Regression tests for the inter-zone pause countdown bug.
+
+    Bug: total_remaining_seconds used to drop the currently running pause from
+    its sum because _zone_started_at was cleared before asyncio.sleep() and
+    remaining_zone_seconds fell through to 0. The fix tracks _pause_started_at
+    explicitly so the property can account for the pause time left.
+    """
+
+    def test_total_remaining_during_pause(self) -> None:
+        """During a pause, total_remaining = pause_left + pending zones + gaps."""
+        zones = _make_zones(3, duration=1)  # 3 × 60s
+        seq = _make_sequencer(zones=zones, pause_seconds=30)
+
+        # Zone 1 just finished, 10s into the 30s inter-zone pause.
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._current_zone = None
+        seq._zone_started_at = None
+        seq._pause_started_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        seq._pause_duration_seconds = 30
+
+        total = seq.total_remaining_seconds
+        assert total is not None
+        # Expected: pause_left(~20) + Z2(60) + Z3(60) + 1 future gap(30) = ~170s
+        assert 168 <= total <= 172
+
+    def test_pause_remaining_monotonically_decreases(self) -> None:
+        """pause_remaining_seconds must tick down and clamp at 0."""
+        seq = _make_sequencer(pause_seconds=30)
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._pause_duration_seconds = 30
+
+        now = datetime.now(timezone.utc)
+
+        seq._pause_started_at = now - timedelta(seconds=5)
+        assert 24 <= (seq.pause_remaining_seconds or -1) <= 26
+
+        seq._pause_started_at = now - timedelta(seconds=15)
+        assert 14 <= (seq.pause_remaining_seconds or -1) <= 16
+
+        seq._pause_started_at = now - timedelta(seconds=25)
+        assert 4 <= (seq.pause_remaining_seconds or -1) <= 6
+
+        seq._pause_started_at = now - timedelta(seconds=40)
+        assert seq.pause_remaining_seconds == 0
+
+    def test_pause_remaining_none_when_not_pausing(self) -> None:
+        seq = _make_sequencer()
+        assert seq.pause_remaining_seconds is None
+
+    def test_total_remaining_during_last_pause_has_no_future_gaps(self) -> None:
+        """Pause before the last zone: only one pending zone, zero future gaps."""
+        zones = _make_zones(3, duration=1)
+        seq = _make_sequencer(zones=zones, pause_seconds=30)
+
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 1  # Z2 just finished, now pausing before Z3
+        seq._pause_started_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        seq._pause_duration_seconds = 30
+
+        total = seq.total_remaining_seconds
+        assert total is not None
+        # Expected: pause_left(~25) + Z3(60) + future_gaps(0) = ~85s
+        assert 83 <= total <= 87
+
+    def test_total_remaining_during_zone_unchanged(self) -> None:
+        """Regression: running-zone path must still compute correctly."""
+        zones = _make_zones(3, duration=1)  # 3 × 60s
+        seq = _make_sequencer(zones=zones, pause_seconds=30)
+
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._current_zone = zones[0]
+        seq._zone_started_at = datetime.now(timezone.utc) - timedelta(seconds=2)
+        # Explicitly NOT pausing
+        seq._pause_started_at = None
+
+        total = seq.total_remaining_seconds
+        assert total is not None
+        # Z1 remaining(~58) + Z2(60) + Z3(60) + 2 gaps(60) = ~238s
+        assert 236 <= total <= 240
+
+    def test_progress_exposes_phase_and_pause_fields(self) -> None:
+        seq = _make_sequencer(pause_seconds=30)
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._pause_started_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        seq._pause_duration_seconds = 30
+
+        p = seq.progress
+        assert p["phase"] == "pausing"
+        assert p["state"] == "running"  # backwards compatible
+        assert isinstance(p["pause_remaining_seconds"], int)
+        assert 0 < p["pause_remaining_seconds"] <= 30
+
+    def test_progress_phase_running_when_zone_active(self) -> None:
+        zones = _make_zones(1, duration=1)
+        seq = _make_sequencer(zones=zones)
+        seq._state = SequencerState.RUNNING
+        seq._current_index = 0
+        seq._current_zone = zones[0]
+        seq._zone_started_at = datetime.now(timezone.utc)
+
+        p = seq.progress
+        assert p["phase"] == "running"
+        assert p["pause_remaining_seconds"] is None
+
+    def test_progress_phase_idle_when_idle(self) -> None:
+        seq = _make_sequencer()
+        p = seq.progress
+        assert p["phase"] == "idle"
+        assert p["pause_remaining_seconds"] is None
+
+    def test_pause_flags_cleared_on_reset(self) -> None:
+        seq = _make_sequencer()
+        seq._pause_started_at = datetime.now(timezone.utc)
+        seq._pause_duration_seconds = 30
+
+        seq._reset()
+
+        assert seq._pause_started_at is None
+        assert seq._pause_duration_seconds == 0
+        assert seq.pause_remaining_seconds is None
+
+    @pytest.mark.asyncio
+    async def test_pause_flags_cleared_on_cancel(self) -> None:
+        """stop() during the inter-zone pause must clear pause tracking."""
+        state_map = {f"switch.valve_{i + 1}": FakeState("off") for i in range(2)}
+        hass = make_mock_hass(state_map)
+        hass.async_create_task = MagicMock(
+            side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+        )
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service == "turn_on":
+                state_map[eid] = FakeState("on")
+            elif service == "turn_off":
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        zones = _make_zones(2, duration=1)
+        seq = _make_sequencer(hass=hass, zones=zones, pause_seconds=30)
+
+        # Let the sequencer progress into the pause by making sleep block
+        # forever on the 30s pause call (the earlier 1s zone sleep returns).
+        pause_entered = asyncio.Event()
+        block_forever: asyncio.Future[None] = asyncio.get_event_loop().create_future()
+
+        async def _fake_sleep(seconds):
+            if seconds == 30:
+                pause_entered.set()
+                await block_forever  # block until cancelled by stop()
+            return None
+
+        with patch(
+            "custom_components.irrigation_proxy.sequencer.asyncio.sleep",
+            new=_fake_sleep,
+        ):
+            await seq.start()
+            await pause_entered.wait()
+            # Mid-pause: flags must be set
+            assert seq._pause_started_at is not None
+            assert seq._pause_duration_seconds == 30
+
+            await seq.stop()
+
+        assert seq._pause_started_at is None
+        assert seq._pause_duration_seconds == 0
+        assert seq.pause_remaining_seconds is None
+        assert seq.state == SequencerState.IDLE

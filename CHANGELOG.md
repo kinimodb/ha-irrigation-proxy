@@ -4,6 +4,23 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.5 — 2026-04-19
+
+### Fixed
+- Program Total Remaining now counts down during the inter-zone delay
+  instead of freezing and under-reporting the remaining runtime. The
+  currently running pause is tracked explicitly and included in the
+  remaining-seconds estimate.
+
+### Added
+- Expose `pause_remaining_seconds` and a `phase` field (`idle` / `running` /
+  `pausing`) on the sequencer progress snapshot for diagnostics.
+
+### Safety
+- No valve-path changes in this release. The fix is limited to the
+  countdown math and does not alter when or how zones / master valves open
+  or close.
+
 ## v0.6.4 — 2026-04-19
 
 ### Changed
