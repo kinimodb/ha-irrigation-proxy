@@ -4,6 +4,26 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.10 — 2026-04-19
+
+### Fixed
+- `irrigation_proxy_program_completed` now reports the number of zones
+  that actually ran the full open→wait→close cycle. Previously
+  `zones_completed` was always equal to `total_zones` even when zones
+  were skipped (valve verify failure, master valve open failure), so
+  automations relying on that field were misled.
+- The event payload also gains a `zones_skipped` field for symmetry, and
+  `irrigation_proxy_zone_completed` continues to fire only for zones
+  that genuinely completed.
+
+### Changed
+- When a program ends with **zero** zones actually completed (e.g. every
+  zone was skipped), the sequencer now fires
+  `irrigation_proxy_program_aborted` with `reason: "all_zones_skipped"`
+  instead of `irrigation_proxy_program_completed`. The aborted event
+  carries `zones_completed`, `zones_skipped` and `total_zones` so
+  notifications can summarise what happened.
+
 ## v0.6.9 — 2026-04-19
 
 ### Safety

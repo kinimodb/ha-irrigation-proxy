@@ -92,6 +92,7 @@ class Sequencer:
         self._depressurize_started_at: datetime | None = None
         self._depressurize_duration_seconds: int = 0
         self._task: asyncio.Task[None] | None = None
+        self._completed_zones: int = 0
 
     # -- Config accessors -----------------------------------------------
 
@@ -305,6 +306,7 @@ class Sequencer:
             f" (master valve {self._master_valve})" if self._master_valve else "",
         )
         self._state = SequencerState.RUNNING
+        self._completed_zones = 0
         self._hass.bus.async_fire(
             EVENT_PROGRAM_STARTED,
             {
@@ -451,6 +453,7 @@ class Sequencer:
                 # 6. Close zone valve (drained)
                 await zone.turn_off(self._hass)
                 self._safety.cancel_deadman(zone.valve_entity_id)
+                self._completed_zones += 1
 
                 _LOGGER.info("Sequencer: zone '%s' completed", zone.name)
                 self._hass.bus.async_fire(
@@ -478,14 +481,36 @@ class Sequencer:
                         self._pause_started_at = None
                         self._pause_duration_seconds = 0
 
-            _LOGGER.info("Sequencer: program completed successfully")
-            self._hass.bus.async_fire(
-                EVENT_PROGRAM_COMPLETED,
-                {
-                    "zones_completed": len(self._zones),
-                    "total_zones": len(self._zones),
-                },
-            )
+            total = len(self._zones)
+            completed = self._completed_zones
+            skipped = total - completed
+            if completed == 0 and total > 0:
+                _LOGGER.warning(
+                    "Sequencer: program ended with 0/%d zones completed "
+                    "(all skipped) – firing aborted", total,
+                )
+                self._hass.bus.async_fire(
+                    EVENT_PROGRAM_ABORTED,
+                    {
+                        "reason": "all_zones_skipped",
+                        "zones_completed": 0,
+                        "zones_skipped": skipped,
+                        "total_zones": total,
+                    },
+                )
+            else:
+                _LOGGER.info(
+                    "Sequencer: program completed (%d/%d zones, %d skipped)",
+                    completed, total, skipped,
+                )
+                self._hass.bus.async_fire(
+                    EVENT_PROGRAM_COMPLETED,
+                    {
+                        "zones_completed": completed,
+                        "zones_skipped": skipped,
+                        "total_zones": total,
+                    },
+                )
 
         except asyncio.CancelledError:
             _LOGGER.info("Sequencer: program was cancelled")
@@ -597,3 +622,4 @@ class Sequencer:
         self._depressurize_started_at = None
         self._depressurize_duration_seconds = 0
         self._task = None
+        # Don't reset _completed_zones – on_complete may still inspect it.
