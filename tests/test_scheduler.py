@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -104,6 +104,65 @@ class TestNextFireTime:
         nxt = next_fire_time(now, cfg)
         assert nxt is not None
         assert nxt.day == 15 and nxt.hour == 6
+
+
+class TestNextFireTimeDST:
+    """W2: next_fire_time must use .astimezone() not tzinfo=now.tzinfo.
+
+    When `now` carries a fixed UTC offset (e.g. from DST summer time),
+    the old datetime.combine(..., tzinfo=now.tzinfo) attached that fixed
+    offset to every candidate, even dates that would have a different
+    offset after DST changeover.  .astimezone() lets Python apply the
+    correct local DST offset for each candidate date.
+    """
+
+    def _cfg(self) -> ScheduleConfig:
+        return ScheduleConfig(
+            enabled=True,
+            start_times=[time(6, 0)],
+            weekdays={"mon"},
+        )
+
+    def test_candidate_uses_local_astimezone_not_now_tzinfo(self) -> None:
+        """Returned datetime must derive its tzinfo from .astimezone(), not
+        from the fixed-offset tzinfo attached to `now`."""
+        # Simulate `now` arriving with a fixed UTC+2 offset (e.g. CEST).
+        utc_plus_2 = timezone(timedelta(hours=2))
+        # Monday 2026-04-13 05:00 UTC+2 = 03:00 UTC
+        now = datetime(2026, 4, 13, 5, 0, tzinfo=utc_plus_2)
+
+        result = next_fire_time(now, self._cfg())
+        assert result is not None
+
+        # The fix: result's tzinfo must NOT be the fixed UTC+2 from `now`.
+        # .astimezone() gives the local system timezone (UTC in the test env).
+        # We verify by checking that the result's UTC offset is not forced to +2.
+        result_utcoffset = result.utcoffset()
+        assert result_utcoffset is not None
+        # The system-local offset (UTC+0 in CI) must be used, not UTC+2.
+        # If the old buggy code ran, utcoffset() would always equal timedelta(hours=2).
+        system_utcoffset = datetime.now().astimezone().utcoffset()
+        assert result_utcoffset == system_utcoffset, (
+            f"Expected result to use system UTC offset ({system_utcoffset}) "
+            f"not the fixed offset from `now` ({result_utcoffset})"
+        )
+
+    def test_result_is_timezone_aware(self) -> None:
+        now = datetime(2026, 4, 13, 5, 0, tzinfo=timezone.utc)
+        result = next_fire_time(now, self._cfg())
+        assert result is not None
+        assert result.tzinfo is not None, "result must be timezone-aware"
+
+    def test_comparison_with_fixed_offset_now_still_correct(self) -> None:
+        """Comparison across different tzinfo objects works because Python
+        normalises to UTC; verify the returned date/hour are sensible."""
+        utc_plus_2 = timezone(timedelta(hours=2))
+        # 05:00 UTC+2 → Monday, 6:00 still ahead today.
+        now = datetime(2026, 4, 13, 5, 0, tzinfo=utc_plus_2)
+        result = next_fire_time(now, self._cfg())
+        assert result is not None
+        assert result.day == 13
+        assert result.hour == 6
 
 
 class _StubSequencer:

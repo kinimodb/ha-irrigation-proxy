@@ -4,6 +4,16 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.6.12 — 2026-04-19
+
+### Fixed
+- `next_fire_time()` now uses `datetime.combine(date, t).astimezone()` instead
+  of `datetime.combine(date, t, tzinfo=now.tzinfo)`. The old form attached the
+  UTC offset of the *current* moment to every candidate date, producing a
+  wrong wall-clock time for dates that cross a DST boundary. The actual
+  scheduler trigger (via `async_track_time_change`) was unaffected; only
+  the display value shown in the sensor/UI was wrong.
+
 ## v0.6.11 — 2026-04-19
 
 ### Safety

@@ -94,7 +94,12 @@ def next_fire_time(
         if weekday_key not in config.weekdays:
             continue
         for t in config.start_times:
-            candidate = datetime.combine(candidate_date, t, tzinfo=now.tzinfo)
+            # Combine as naive then convert via .astimezone() so the local
+            # DST offset for that specific date is applied correctly.
+            # datetime.combine(..., tzinfo=now.tzinfo) would copy the *current*
+            # UTC offset and produce the wrong wall-clock time on the far side
+            # of a DST boundary.
+            candidate = datetime.combine(candidate_date, t).astimezone()
             if candidate > now:
                 return candidate
     return None
