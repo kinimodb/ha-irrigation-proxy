@@ -69,12 +69,14 @@
         "data": {
           "inter_zone_delay_seconds": "Delay between zones (seconds)",
           "depressurize_seconds": "Depressurize delay (seconds)",
-          "max_runtime_minutes": "Maximum runtime per zone (minutes)"
+          "max_runtime_minutes": "Maximum runtime per zone (minutes)",
+          "weather_factor_sensor": "Weather factor sensor (optional)"
         },
         "data_description": {
           "inter_zone_delay_seconds": "Pause after a zone finishes before the next zone starts. Counted on top of the irrigation time, never deducted from it.",
           "depressurize_seconds": "Wait after closing the master valve before closing the zone valve – lets pressure drain safely. Added to the program total; the configured zone duration is unchanged.",
-          "max_runtime_minutes": "Safety deadman: if a valve stays open longer than this, it is force-closed. Applies to zone valves and the manual master-valve switch."
+          "max_runtime_minutes": "Safety deadman: if a valve stays open longer than this, it is force-closed. Applies to zone valves and the manual master-valve switch.",
+          "weather_factor_sensor": "Sensor whose numeric state is multiplied onto every zone duration (0.0–2.0). Example: 0.8 shortens a 10-minute zone to 8 minutes. Leave empty to disable weather-based adjustment. The sensor must report a factor, not seconds – wrap second-based sensors (e.g. HAsmartirrigation) with a Template sensor first."
         }
       },
       "safety": {
@@ -122,6 +124,9 @@
       "schedule_enabled": {
         "name": "Automatic Schedule"
       },
+      "ignore_weather_adjustment": {
+        "name": "Ignore Weather Adjustment"
+      },
       "master_valve": {
         "name": "Master Valve"
       }
@@ -153,6 +158,9 @@
       },
       "next_start": {
         "name": "Next Scheduled Start"
+      },
+      "weather_factor": {
+        "name": "Weather Factor"
       }
     },
     "number": {

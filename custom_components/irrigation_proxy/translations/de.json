@@ -69,12 +69,14 @@
         "data": {
           "inter_zone_delay_seconds": "Pause zwischen Zonen (Sekunden)",
           "depressurize_seconds": "Druckabbau-Pause (Sekunden)",
-          "max_runtime_minutes": "Maximale Laufzeit pro Zone (Minuten)"
+          "max_runtime_minutes": "Maximale Laufzeit pro Zone (Minuten)",
+          "weather_factor_sensor": "Wetter-Faktor-Sensor (optional)"
         },
         "data_description": {
           "inter_zone_delay_seconds": "Wartezeit nachdem eine Zone fertig ist, bevor die nächste startet. Wird zur Bewässerungszeit hinzugerechnet, niemals davon abgezogen.",
           "depressurize_seconds": "Wartezeit nach dem Schließen des Hauptventils, bevor das Zonen-Ventil schließt – damit sich der Druck sauber abbaut. Wird auf die Programm-Gesamtzeit aufgeschlagen; die konfigurierte Zonen-Dauer bleibt unverändert.",
-          "max_runtime_minutes": "Sicherheits-Deadman: Bleibt ein Ventil länger als dies offen, wird es zwangsweise geschlossen. Gilt für Zonen-Ventile und den manuellen Hauptventil-Schalter."
+          "max_runtime_minutes": "Sicherheits-Deadman: Bleibt ein Ventil länger als dies offen, wird es zwangsweise geschlossen. Gilt für Zonen-Ventile und den manuellen Hauptventil-Schalter.",
+          "weather_factor_sensor": "Sensor, dessen Zahlenwert bei jeder Zone auf die konfigurierte Dauer multipliziert wird (0.0–2.0). Beispiel: 0.8 macht aus 10 Min → 8 Min. Leer lassen = Wetteranpassung aus. Der Sensor muss einen Faktor liefern, keine Sekunden – Sekunden-basierte Sensoren (z. B. HAsmartirrigation) zuerst per Template-Sensor umrechnen."
         }
       },
       "safety": {
@@ -122,6 +124,9 @@
       "schedule_enabled": {
         "name": "Automatischer Zeitplan"
       },
+      "ignore_weather_adjustment": {
+        "name": "Wetteranpassung ignorieren"
+      },
       "master_valve": {
         "name": "Hauptventil"
       }
@@ -153,6 +158,9 @@
       },
       "next_start": {
         "name": "Nächster Start"
+      },
+      "weather_factor": {
+        "name": "Wetter-Faktor"
       }
     },
     "number": {

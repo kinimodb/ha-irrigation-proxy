@@ -17,9 +17,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
     DEFAULT_UPDATE_INTERVAL_SECONDS,
+    DEFAULT_WEATHER_FACTOR,
     DOMAIN,
     EVENT_LEAK_DETECTED,
     TIMER_TICK_INTERVAL_SECONDS,
+    WEATHER_FACTOR_MAX,
+    WEATHER_FACTOR_MIN,
 )
 from .safety import SafetyManager
 from .sequencer import Sequencer, SequencerState
@@ -29,6 +32,26 @@ if TYPE_CHECKING:
     from .scheduler import ProgramScheduler
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _parse_weather_factor(raw: Any) -> float:
+    """Parse and clamp the weather sensor state into a runtime factor.
+
+    Returns ``DEFAULT_WEATHER_FACTOR`` (1.0) for ``None``, ``unknown``,
+    ``unavailable`` or non-numeric states. Valid floats are clamped to
+    ``[WEATHER_FACTOR_MIN, WEATHER_FACTOR_MAX]`` so a misconfigured sensor
+    cannot push runtimes beyond the configured safety bounds.
+    """
+    if raw is None:
+        return DEFAULT_WEATHER_FACTOR
+    text = str(raw).strip().lower()
+    if text in ("", "unknown", "unavailable", "none"):
+        return DEFAULT_WEATHER_FACTOR
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        return DEFAULT_WEATHER_FACTOR
+    return max(WEATHER_FACTOR_MIN, min(WEATHER_FACTOR_MAX, value))
 
 
 class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -42,6 +65,8 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         safety: SafetyManager,
         sequencer: Sequencer,
         leak_sensors: list[str] | None = None,
+        weather_factor_sensor: str | None = None,
+        ignore_weather: bool = False,
     ) -> None:
         super().__init__(
             hass,
@@ -59,11 +84,17 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._tick_unsub: Callable[[], None] | None = None
         self._state_change_unsub: Callable[[], None] | None = None
         self._leak_unsub: Callable[[], None] | None = None
+        self._weather_unsub: Callable[[], None] | None = None
         self._leak_emergency_active: bool = False
         # Set by Number entity setters before they call async_update_entry,
         # so the options-update listener can skip the disruptive reload
         # when only a live-tunable parameter changed.
         self.suppress_next_reload: bool = False
+
+        # Weather-based runtime adjustment
+        self.weather_factor_sensor: str | None = weather_factor_sensor or None
+        self.weather_factor: float = DEFAULT_WEATHER_FACTOR
+        self.ignore_weather: bool = bool(ignore_weather)
 
     # -- Lookup helpers -------------------------------------------------
 
@@ -99,7 +130,73 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug("Coordinator: state tracking unsubscribe failed")
             self._state_change_unsub = None
         self.stop_leak_tracking()
+        self.stop_weather_tracking()
         self._stop_tick()
+
+    # -- Weather factor tracking ---------------------------------------
+
+    def current_adjustment(self) -> tuple[float, bool]:
+        """Return (factor, ignored) snapshot for the sequencer.
+
+        ``ignored=True`` tells the sequencer to act as if the factor were 1.0.
+        The actual factor is still returned so the UI can show it.
+        """
+        return (self.weather_factor, self.ignore_weather)
+
+    def start_weather_tracking(self) -> None:
+        """Subscribe to the configured weather factor sensor."""
+        if self._weather_unsub is not None:
+            return
+        if not self.weather_factor_sensor:
+            return
+
+        self._weather_unsub = async_track_state_change_event(
+            self.hass,
+            [self.weather_factor_sensor],
+            self._on_weather_state_change,
+        )
+
+        # Seed the cache with the current state so the first run of the
+        # program does not have to wait for a state change.
+        self._refresh_weather_factor()
+
+    def stop_weather_tracking(self) -> None:
+        if self._weather_unsub is not None:
+            try:
+                self._weather_unsub()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Coordinator: weather tracking unsubscribe failed")
+            self._weather_unsub = None
+
+    @callback
+    def _on_weather_state_change(self, event: Event) -> None:
+        """Cache the new factor and refresh listeners."""
+        new_state = event.data.get("new_state")
+        value = new_state.state if new_state is not None else None
+        self._apply_weather_value(value)
+
+    def _refresh_weather_factor(self) -> None:
+        """Synchronously re-read the weather sensor into the cache."""
+        if not self.weather_factor_sensor:
+            self.weather_factor = DEFAULT_WEATHER_FACTOR
+            return
+        state = self.hass.states.get(self.weather_factor_sensor)
+        value = state.state if state is not None else None
+        self._apply_weather_value(value)
+
+    def _apply_weather_value(self, raw: Any) -> None:
+        """Parse, clamp, store, and notify listeners."""
+        factor = _parse_weather_factor(raw)
+        if factor == self.weather_factor:
+            return
+        self.weather_factor = factor
+        # Data-only update so the WeatherFactorSensor re-renders without a
+        # full coordinator poll. Safe when self.data is still None (first
+        # refresh) because async_update_listeners is a no-op in that case.
+        try:
+            self.async_update_listeners()
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Coordinator: async_update_listeners failed")
 
     # -- Leak / water-shortage sensor handling --------------------------
 
@@ -351,6 +448,12 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll valve states, run safety checks, return status dict."""
         data: dict[str, Any] = {}
+
+        # Safety-net revalidation for the weather factor – the state-change
+        # subscription is the authoritative source, but a missed / crashed
+        # subscription still converges here within 30 s.
+        if self.weather_factor_sensor:
+            self._refresh_weather_factor()
 
         for zone in self.zones:
             valve_id = zone.valve_entity_id

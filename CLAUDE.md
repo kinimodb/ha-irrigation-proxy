@@ -3,7 +3,9 @@
 ## Projekt
 
 ha-irrigation-proxy ist eine Home Assistant Custom Integration (HACS) für
-intelligente Bewässerungssteuerung mit Sonoff SWV Zigbee-Ventilen.
+intelligente Bewässerungssteuerung. Primär getestet mit Sonoff-SWV-Ventilen
+über Zigbee (ZHA oder zigbee2mqtt), grundsätzlich aber mit jedem `switch`-
+oder `valve`-Entity kompatibel.
 
 ## Architektur-Prinzipien
 
@@ -15,6 +17,12 @@ intelligente Bewässerungssteuerung mit Sonoff SWV Zigbee-Ventilen.
 4. **Separation of Concerns** – Sequencer, Weather, Safety sind unabhängige
    Module. Der Coordinator orchestriert.
 5. **Keine YAML-Config** – Alles über Config Flow / Options Flow.
+6. **Integrations-Neutralität** – Der Proxy greift Ventile ausschließlich über
+   die generischen `switch`-/`valve`-Services von HA an. Kein Code darf z2m-,
+   ZHA- oder herstellerspezifische Attribute/Topics voraussetzen. Stack-
+   spezifische Zusatzfeatures (z. B. erweiterte SWV-Diagnose, die nur über
+   z2m-MQTT-Attribute lesbar ist) sind erlaubt, müssen aber **optional** sein
+   und das Kernverhalten (Open/Close, Deadman, Verify) unverändert lassen.
 
 ## Code-Stil
 

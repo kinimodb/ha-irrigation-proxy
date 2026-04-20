@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
+    CONF_IGNORE_WEATHER_ADJUSTMENT,
     CONF_NAME,
     CONF_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
@@ -36,6 +37,7 @@ async def async_setup_entry(
     entities: list[SwitchEntity] = [
         ProgramSwitch(coordinator, entry),
         ScheduleEnabledSwitch(coordinator, entry),
+        IgnoreWeatherAdjustmentSwitch(coordinator, entry),
     ]
     entities.extend(
         ZoneSwitch(coordinator, entry, zone.valve_entity_id)
@@ -174,6 +176,69 @@ class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEnti
         self.hass.config_entries.async_update_entry(self._entry, data=new_data)
         if self.coordinator.scheduler is not None:
             self.coordinator.scheduler.reload()
+        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set_enabled(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set_enabled(False)
+
+
+class IgnoreWeatherAdjustmentSwitch(
+    CoordinatorEntity[IrrigationCoordinator], SwitchEntity
+):
+    """Dashboard toggle that bypasses the weather-based runtime factor.
+
+    OFF (default) → the configured factor sensor shortens or extends the
+    per-zone runtime. ON → the factor is ignored and every zone runs its
+    full configured duration. The switch state is persisted in
+    ``entry.data`` so it survives a Home Assistant restart.
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.SWITCH
+    _attr_icon = "mdi:weather-sunny-off"
+    _attr_translation_key = "ignore_weather_adjustment"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_ignore_weather"
+        self._attr_name = "Ignore Weather Adjustment"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name=self._entry.data.get(CONF_NAME, "Irrigation"),
+            manufacturer="Irrigation Proxy",
+            model="Virtual Irrigation Controller",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.ignore_weather)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "weather_factor": self.coordinator.weather_factor,
+            "source_entity": self.coordinator.weather_factor_sensor,
+        }
+
+    async def _set_enabled(self, enabled: bool) -> None:
+        # Live-tunable – avoid a full config-entry reload which would stop
+        # a running program.
+        self.coordinator.suppress_next_reload = True
+        self.coordinator.ignore_weather = enabled
+        new_data = {**self._entry.data, CONF_IGNORE_WEATHER_ADJUSTMENT: enabled}
+        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 

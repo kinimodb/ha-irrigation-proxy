@@ -37,6 +37,13 @@ CONF_MAX_RUNTIME_MINUTES: Final = "max_runtime_minutes"
 # stopped and all valves (zones + master) are force-closed.
 CONF_LEAK_SENSORS: Final = "leak_sensors"
 
+# Weather / runtime adjustment
+# Optional sensor entity_id. Its float state is multiplied into the
+# configured zone duration (factor 0.0–2.0). Empty / missing disables the
+# feature. Persisted switch state for "Ignore weather adjustment".
+CONF_WEATHER_FACTOR_SENSOR: Final = "weather_factor_sensor"
+CONF_IGNORE_WEATHER_ADJUSTMENT: Final = "ignore_weather_adjustment"
+
 # -- Weekdays --------------------------------------------------------------
 
 WEEKDAYS: Final[tuple[str, ...]] = (
@@ -56,6 +63,13 @@ DEFAULT_MAX_RUNTIME_MINUTES: Final = 60
 DEFAULT_INTER_ZONE_DELAY_SECONDS: Final = 30
 DEFAULT_DEPRESSURIZE_SECONDS: Final = 5
 DEFAULT_SCHEDULE_ENABLED: Final = False
+
+# Weather factor bounds. Upper clamp stays below 2.0 so a sensor glitch can
+# at worst double the runtime – the per-zone deadman still hard-caps the
+# absolute time a valve may stay open.
+DEFAULT_WEATHER_FACTOR: Final = 1.0
+WEATHER_FACTOR_MIN: Final = 0.0
+WEATHER_FACTOR_MAX: Final = 2.0
 
 DEFAULT_UPDATE_INTERVAL_SECONDS: Final = 30
 # Maximum time we wait for a valve/switch to reflect the commanded state
