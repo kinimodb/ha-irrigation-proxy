@@ -11,10 +11,6 @@ that govern every entry.
   mirrors the `schedule_enabled` flag from the options flow. Toggling it
   re-registers the underlying time triggers live without reloading the
   config entry, so a running program is never interrupted.
-- Per-zone `<Zone> Duration Seconds` number entity (0–59 s). Combined
-  with the existing minute value, zone runtimes can now be expressed as
-  `MM:SS` – the sequencer consumes `minutes * 60 + extra_seconds`. The
-  options flow `Add zone` / `Edit zone` steps expose the same field.
 
 ### Changed
 - Rename `Program` switch to `Program (Manual Start/Stop)` to make the

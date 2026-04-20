@@ -80,13 +80,10 @@ class Zone:
         valve_entity_id: str,
         duration_minutes: int,
         zone_id: str | None = None,
-        duration_extra_seconds: int = 0,
     ) -> None:
         self.name = name
         self.valve_entity_id = valve_entity_id
         self.duration_minutes = duration_minutes
-        # Clamp to 0–59 – above 60 s belongs in `duration_minutes`.
-        self.duration_extra_seconds = max(0, min(59, int(duration_extra_seconds)))
         self.zone_id = zone_id
 
         self.is_on: bool = False
@@ -96,8 +93,8 @@ class Zone:
 
     @property
     def duration_seconds(self) -> int:
-        """Configured per-zone duration in seconds (minutes + extra seconds)."""
-        return int(self.duration_minutes * 60 + self.duration_extra_seconds)
+        """Configured per-zone duration in seconds."""
+        return int(self.duration_minutes * 60)
 
     async def turn_on(self, hass: HomeAssistant) -> bool:
         """Open the valve and verify state.

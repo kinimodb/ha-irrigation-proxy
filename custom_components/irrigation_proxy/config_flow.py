@@ -38,7 +38,6 @@ from .const import (
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
-    CONF_ZONE_DURATION_EXTRA_SECONDS,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_ID,
     CONF_ZONE_NAME,
@@ -102,18 +101,6 @@ def _depressurize_field() -> Any:
         selector.NumberSelectorConfig(
             min=0,
             max=60,
-            step=1,
-            mode=selector.NumberSelectorMode.BOX,
-            unit_of_measurement="s",
-        )
-    )
-
-
-def _duration_extra_seconds_field() -> Any:
-    return selector.NumberSelector(
-        selector.NumberSelectorConfig(
-            min=0,
-            max=59,
             step=1,
             mode=selector.NumberSelectorMode.BOX,
             unit_of_measurement="s",
@@ -341,18 +328,6 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                             DEFAULT_DURATION_MINUTES,
                         )
                     ),
-                    CONF_ZONE_DURATION_EXTRA_SECONDS: max(
-                        0,
-                        min(
-                            59,
-                            int(
-                                user_input.get(
-                                    CONF_ZONE_DURATION_EXTRA_SECONDS, 0
-                                )
-                                or 0
-                            ),
-                        ),
-                    ),
                 }
                 _LOGGER.debug("zone_add: created zone %s", new_zone)
                 zones = list(self._pending.get(CONF_ZONES) or [])
@@ -373,10 +348,6 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                         CONF_ZONE_DURATION_MINUTES,
                         default=DEFAULT_DURATION_MINUTES,
                     ): _duration_field(),
-                    vol.Optional(
-                        CONF_ZONE_DURATION_EXTRA_SECONDS,
-                        default=0,
-                    ): _duration_extra_seconds_field(),
                 }
             ),
             errors=errors,
@@ -426,21 +397,6 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                             DEFAULT_DURATION_MINUTES,
                         )
                     ),
-                    CONF_ZONE_DURATION_EXTRA_SECONDS: max(
-                        0,
-                        min(
-                            59,
-                            int(
-                                user_input.get(
-                                    CONF_ZONE_DURATION_EXTRA_SECONDS,
-                                    zone.get(
-                                        CONF_ZONE_DURATION_EXTRA_SECONDS, 0
-                                    ),
-                                )
-                                or 0
-                            ),
-                        ),
-                    ),
                 }
                 self._pending[CONF_ZONES] = zones
                 self._editing_zone_id = None
@@ -467,12 +423,6 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                             )
                         ),
                     ): _duration_field(),
-                    vol.Optional(
-                        CONF_ZONE_DURATION_EXTRA_SECONDS,
-                        default=int(
-                            zone.get(CONF_ZONE_DURATION_EXTRA_SECONDS, 0) or 0
-                        ),
-                    ): _duration_extra_seconds_field(),
                     vol.Optional("delete", default=False): selector.BooleanSelector(),
                 }
             ),
