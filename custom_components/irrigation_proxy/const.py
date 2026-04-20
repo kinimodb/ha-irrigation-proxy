@@ -15,6 +15,10 @@ CONF_ZONE_ID: Final = "id"
 CONF_ZONE_NAME: Final = "name"
 CONF_ZONE_VALVE: Final = "valve_entity_id"
 CONF_ZONE_DURATION_MINUTES: Final = "duration_minutes"
+# Optional per-zone sub-minute granularity (0–59). Added in v0.8.0 so the
+# total zone runtime can be expressed as MM:SS; defaults to 0 for entries
+# written by older versions.
+CONF_ZONE_DURATION_EXTRA_SECONDS: Final = "duration_extra_seconds"
 
 # Optional master / pump valve that sits on the main supply line.
 # When configured: opens after the zone valve, closes before the zone valve,

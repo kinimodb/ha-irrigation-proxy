@@ -133,6 +133,11 @@ if not _HA_AVAILABLE:
     ha_device_registry = _make_module("homeassistant.helpers.device_registry")
     ha_device_registry.DeviceInfo = dict  # type: ignore[attr-defined]
 
+    # --- homeassistant.helpers.entity_registry ---
+    ha_entity_registry = _make_module("homeassistant.helpers.entity_registry")
+    ha_entity_registry.async_get = MagicMock()  # type: ignore[attr-defined]
+    ha_entity_registry.async_entries_for_config_entry = MagicMock(return_value=[])  # type: ignore[attr-defined]
+
     # --- homeassistant.helpers.selector ---
     ha_selector = _make_module("homeassistant.helpers.selector")
 
