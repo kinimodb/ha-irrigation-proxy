@@ -38,6 +38,7 @@ from .const import (
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
+    CONF_WEATHER_FACTOR_SENSOR,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_ID,
     CONF_ZONE_NAME,
@@ -133,6 +134,13 @@ def _leak_sensor_field() -> Any:
     )
 
 
+def _weather_factor_sensor_field() -> Any:
+    """Single sensor entity whose numeric state is used as runtime factor."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(domain="sensor")
+    )
+
+
 def _validate_start_times(raw: str | list[str] | None) -> list[str]:
     """Parse a schedule_start_times input to HH:MM strings."""
     parsed = parse_start_times(raw)
@@ -154,6 +162,7 @@ def _default_entry_data(name: str) -> dict[str, Any]:
         CONF_DEPRESSURIZE_SECONDS: DEFAULT_DEPRESSURIZE_SECONDS,
         CONF_MAX_RUNTIME_MINUTES: DEFAULT_MAX_RUNTIME_MINUTES,
         CONF_LEAK_SENSORS: [],
+        CONF_WEATHER_FACTOR_SENSOR: None,
     }
 
 
@@ -453,7 +462,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
     async def async_step_advanced(
         self, user_input: dict[str, Any] | None = None
     ) -> Any:
-        """Inter-zone pause, depressurize, max runtime."""
+        """Inter-zone pause, depressurize, max runtime, weather factor."""
         if user_input is not None:
             self._pending[CONF_INTER_ZONE_DELAY_SECONDS] = int(
                 user_input.get(
@@ -471,7 +480,13 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                     CONF_MAX_RUNTIME_MINUTES, DEFAULT_MAX_RUNTIME_MINUTES
                 )
             )
+            weather_sensor = user_input.get(CONF_WEATHER_FACTOR_SENSOR) or None
+            self._pending[CONF_WEATHER_FACTOR_SENSOR] = weather_sensor
             return await self.async_step_init()
+
+        current_weather_sensor = (
+            self._pending.get(CONF_WEATHER_FACTOR_SENSOR) or ""
+        )
 
         return self.async_show_form(
             step_id="advanced",
@@ -498,6 +513,10 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                             DEFAULT_MAX_RUNTIME_MINUTES,
                         ),
                     ): _max_runtime_field(),
+                    vol.Optional(
+                        CONF_WEATHER_FACTOR_SENSOR,
+                        description={"suggested_value": current_weather_sensor},
+                    ): _weather_factor_sensor_field(),
                 }
             ),
         )

@@ -52,6 +52,7 @@ async def async_setup_entry(
         PauseRemainingSensor(coordinator, entry),
         ProgramTotalRemainingSensor(coordinator, entry),
         NextStartSensor(coordinator, entry),
+        WeatherFactorSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -302,6 +303,44 @@ class DepressurizeRemainingSensor(_BaseSensor):
         return {
             "current_phase_remaining_seconds": (
                 seq.get("depressurize_remaining_seconds")
+            ),
+        }
+
+
+class WeatherFactorSensor(_BaseSensor):
+    """Current weather-based runtime factor (1.0 = no adjustment).
+
+    Pulls from ``coordinator.weather_factor``, which is updated live via
+    a state subscription on the configured factor sensor. When the user
+    toggles the Ignore-Weather switch we still expose the raw factor
+    here; the ``ignored`` attribute flips so dashboards can dim the tile.
+    """
+
+    _attr_icon = "mdi:weather-partly-rainy"
+    _attr_translation_key = "weather_factor"
+    _attr_suggested_display_precision = 2
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator, entry)
+        self._attr_unique_id = f"{entry.entry_id}_weather_factor"
+        self._attr_name = "Weather Factor"
+
+    @property
+    def native_value(self) -> float:
+        return round(float(self.coordinator.weather_factor), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "source_entity": self.coordinator.weather_factor_sensor,
+            "ignored": bool(self.coordinator.ignore_weather),
+            "effective_factor": (
+                1.0 if self.coordinator.ignore_weather
+                else round(float(self.coordinator.weather_factor), 2)
             ),
         }
 

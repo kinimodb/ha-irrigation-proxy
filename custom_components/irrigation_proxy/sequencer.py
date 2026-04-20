@@ -33,6 +33,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     DEFAULT_CLOSE_RETRY_MAX,
+    DEFAULT_WEATHER_FACTOR,
     DOMAIN,
     EVENT_MASTER_CLOSE_FAILED,
     EVENT_PROGRAM_ABORTED,
@@ -76,6 +77,7 @@ class Sequencer:
         master_valve_entity_id: str | None = None,
         depressurize_seconds: int = 5,
         on_complete: Callable[[], Any] | None = None,
+        adjustment_provider: Callable[[], tuple[float, bool]] | None = None,
     ) -> None:
         self._hass = hass
         self._zones = zones
@@ -84,6 +86,11 @@ class Sequencer:
         self._master_valve = master_valve_entity_id or None
         self._depressurize_seconds = max(0, int(depressurize_seconds))
         self._on_complete = on_complete
+        # Returns (factor, ignored). None = no adjustment available.
+        # Snapshot is taken at start() so the effective runtimes stay
+        # consistent for the duration of a run, even if the sensor changes.
+        self._adjustment_provider = adjustment_provider
+        self._current_run_factor: float = DEFAULT_WEATHER_FACTOR
 
         self._state = SequencerState.IDLE
         self._current_index: int = -1
@@ -123,6 +130,48 @@ class Sequencer:
         """List of configured zones (read-only snapshot)."""
         return list(self._zones)
 
+    # -- Weather-based runtime adjustment ------------------------------
+
+    def set_adjustment_provider(
+        self, provider: Callable[[], tuple[float, bool]] | None
+    ) -> None:
+        """Register the callable the sequencer consults for the factor."""
+        self._adjustment_provider = provider
+
+    def _current_adjustment(self) -> tuple[float, bool]:
+        """Return (factor, ignored) – 1.0 / False when no provider is set."""
+        if self._adjustment_provider is None:
+            return (DEFAULT_WEATHER_FACTOR, False)
+        try:
+            factor, ignored = self._adjustment_provider()
+        except Exception:  # noqa: BLE001 – provider must never crash us
+            _LOGGER.exception(
+                "Sequencer: weather adjustment provider raised; "
+                "falling back to factor 1.0"
+            )
+            return (DEFAULT_WEATHER_FACTOR, False)
+        return (float(factor), bool(ignored))
+
+    @property
+    def current_factor(self) -> float:
+        """Active factor – either the run snapshot or the live provider read."""
+        if self._state == SequencerState.RUNNING:
+            return self._current_run_factor
+        factor, ignored = self._current_adjustment()
+        return DEFAULT_WEATHER_FACTOR if ignored else factor
+
+    def _zone_effective_seconds(self, zone_index: int) -> int:
+        """Duration the given zone will actually be watered for.
+
+        The factor snapshot is taken at ``start()`` and stays constant for
+        the run so countdowns can't jump mid-program. When idle we consult
+        the provider live so the Dashboard preview reflects today's factor.
+        """
+        if zone_index < 0 or zone_index >= len(self._zones):
+            return 0
+        base = self._zones[zone_index].duration_seconds
+        return max(0, int(round(base * self.current_factor)))
+
     # -- Runtime state --------------------------------------------------
 
     @property
@@ -156,7 +205,7 @@ class Sequencer:
             return None
         if self._current_index >= len(self._zones):
             return None
-        duration_sec = self._zones[self._current_index].duration_seconds
+        duration_sec = self._zone_effective_seconds(self._current_index)
         elapsed = (
             datetime.now(timezone.utc) - self._zone_started_at
         ).total_seconds()
@@ -193,7 +242,11 @@ class Sequencer:
         """Full predictable block of one zone: duration + depressurize + trailing pause."""
         if zone_index < 0 or zone_index >= len(self._zones):
             return 0
-        block = self._zones[zone_index].duration_seconds
+        effective = self._zone_effective_seconds(zone_index)
+        if effective == 0:
+            # Skipped zone (factor 0) – no depressurize, no trailing pause.
+            return 0
+        block = effective
         block += self._depressurize_active_seconds
         if zone_index < len(self._zones) - 1:
             block += self._pause_seconds
@@ -264,7 +317,9 @@ class Sequencer:
         phases don't add to this).
         """
         if self._state == SequencerState.IDLE:
-            return sum(z.duration_seconds for z in self._zones)
+            return sum(
+                self._zone_effective_seconds(i) for i in range(len(self._zones))
+            )
 
         if self._current_index < 0:
             return 0
@@ -274,7 +329,8 @@ class Sequencer:
             return 0
 
         future_zone_time = sum(
-            z.duration_seconds for z in self._zones[idx + 1 :]
+            self._zone_effective_seconds(i)
+            for i in range(idx + 1, len(self._zones))
         )
 
         if (
@@ -290,6 +346,9 @@ class Sequencer:
     @property
     def pauses_total_remaining_seconds(self) -> int:
         """Sum of every inter-zone pause still to come in the program."""
+        # factor=0 skips every zone – and therefore every pause between them.
+        if self.current_factor <= 0:
+            return 0
         n = len(self._zones)
         if n <= 1:
             return 0
@@ -317,6 +376,9 @@ class Sequencer:
     @property
     def depressurize_total_remaining_seconds(self) -> int:
         """Sum of every master-valve drain wait still to come in the program."""
+        # factor=0 skips every zone – so no drain waits either.
+        if self.current_factor <= 0:
+            return 0
         per_zone = self._depressurize_active_seconds
         if per_zone == 0 or not self._zones:
             return 0
@@ -379,14 +441,16 @@ class Sequencer:
             "pause_seconds": self._pause_seconds,
             "master_valve": self._master_valve,
             "depressurize_seconds": self._depressurize_seconds,
+            "weather_factor": self.current_factor,
             "zones": [
                 {
                     "name": z.name,
                     "valve_entity_id": z.valve_entity_id,
                     "duration_minutes": z.duration_minutes,
                     "duration_seconds": z.duration_seconds,
+                    "effective_duration_seconds": self._zone_effective_seconds(i),
                 }
-                for z in self._zones
+                for i, z in enumerate(self._zones)
             ],
         }
 
@@ -402,10 +466,22 @@ class Sequencer:
             _LOGGER.warning("Sequencer: no zones configured, nothing to run")
             return
 
+        # Snapshot the weather-adjustment factor exactly once at the start
+        # of the program. Any later sensor wobble leaves the currently-
+        # running program's timings untouched – the "Zuverlässigkeit über
+        # Features" principle applied to runtime planning.
+        factor, ignored = self._current_adjustment()
+        self._current_run_factor = (
+            DEFAULT_WEATHER_FACTOR if ignored else factor
+        )
+
         _LOGGER.info(
-            "Sequencer: starting program with %d zone(s)%s",
+            "Sequencer: starting program with %d zone(s)%s "
+            "(weather factor %.2f%s)",
             len(self._zones),
             f" (master valve {self._master_valve})" if self._master_valve else "",
+            self._current_run_factor,
+            " – ignored" if ignored else "",
         )
         self._state = SequencerState.RUNNING
         self._completed_zones = 0
@@ -415,6 +491,8 @@ class Sequencer:
                 "total_zones": len(self._zones),
                 "zones": [z.name for z in self._zones],
                 "total_duration_seconds": self.total_program_seconds_idle,
+                "weather_factor": self._current_run_factor,
+                "weather_ignored": ignored,
             },
         )
         self._task = self._hass.async_create_task(
@@ -522,12 +600,42 @@ class Sequencer:
                 # exactly when water flows, not during Zigbee verify latency.
                 self._zone_started_at = None
 
+                effective_seconds = self._zone_effective_seconds(i)
+
+                if effective_seconds <= 0:
+                    # Weather factor 0 – skip the zone completely. No open,
+                    # no deadman, no depressurize, no trailing pause.
+                    _LOGGER.info(
+                        "Sequencer: skipping zone %d/%d '%s' "
+                        "(weather factor %.2f => 0s)",
+                        i + 1,
+                        len(self._zones),
+                        zone.name,
+                        self._current_run_factor,
+                    )
+                    self._hass.bus.async_fire(
+                        EVENT_ZONE_STARTED,
+                        {
+                            "zone_name": zone.name,
+                            "zone_index": i,
+                            "valve_entity_id": zone.valve_entity_id,
+                            "duration_seconds": 0,
+                            "skipped": True,
+                            "reason": "weather_factor_zero",
+                            "weather_factor": self._current_run_factor,
+                        },
+                    )
+                    continue
+
                 _LOGGER.info(
-                    "Sequencer: starting zone %d/%d '%s' for %ds",
+                    "Sequencer: starting zone %d/%d '%s' for %ds "
+                    "(base %ds × factor %.2f)",
                     i + 1,
                     len(self._zones),
                     zone.name,
+                    effective_seconds,
                     zone.duration_seconds,
+                    self._current_run_factor,
                 )
 
                 # Arm the deadman BEFORE issuing the open command. Zigbee
@@ -573,7 +681,10 @@ class Sequencer:
                         "zone_name": zone.name,
                         "zone_index": i,
                         "valve_entity_id": zone.valve_entity_id,
-                        "duration_seconds": zone.duration_seconds,
+                        "duration_seconds": effective_seconds,
+                        "base_duration_seconds": zone.duration_seconds,
+                        "weather_factor": self._current_run_factor,
+                        "skipped": False,
                     },
                 )
 
@@ -588,12 +699,13 @@ class Sequencer:
                     self._safety.cancel_deadman(zone.valve_entity_id)
                     continue
 
-                # 3. Wait the configured duration. Start the user-visible
-                # zone countdown exactly here so it aligns with the actual
-                # water-flow window (not with the open/verify latency above).
+                # 3. Wait the (weather-adjusted) duration. Start the user-
+                # visible zone countdown exactly here so it aligns with the
+                # actual water-flow window (not with the open/verify latency
+                # above).
                 self._zone_started_at = datetime.now(timezone.utc)
                 try:
-                    await asyncio.sleep(zone.duration_seconds)
+                    await asyncio.sleep(effective_seconds)
                 finally:
                     # Clear so remaining_zone_seconds returns None during
                     # the depressurize phase – the user sees the dedicated

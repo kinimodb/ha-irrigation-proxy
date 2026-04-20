@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import (
     CONF_DEPRESSURIZE_SECONDS,
+    CONF_IGNORE_WEATHER_ADJUSTMENT,
     CONF_INTER_ZONE_DELAY_SECONDS,
     CONF_LEAK_SENSORS,
     CONF_MASTER_VALVE,
@@ -19,6 +20,7 @@ from .const import (
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
+    CONF_WEATHER_FACTOR_SENSOR,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_ID,
     CONF_ZONE_NAME,
@@ -151,6 +153,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         str(s) for s in leak_sensors_raw if isinstance(s, str) and s
     ]
 
+    weather_sensor_raw = raw.get(CONF_WEATHER_FACTOR_SENSOR)
+    weather_sensor: str | None = (
+        weather_sensor_raw if isinstance(weather_sensor_raw, str) and weather_sensor_raw
+        else None
+    )
+    ignore_weather = bool(raw.get(CONF_IGNORE_WEATHER_ADJUSTMENT, False))
+
     zones = _build_zones(raw)
 
     # v0.7.0 removed the per-zone "<zone> Duration" sensor in favour of the
@@ -186,8 +195,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     coordinator = IrrigationCoordinator(
-        hass, entry, zones, safety, sequencer, leak_sensors=leak_sensors
+        hass,
+        entry,
+        zones,
+        safety,
+        sequencer,
+        leak_sensors=leak_sensors,
+        weather_factor_sensor=weather_sensor,
+        ignore_weather=ignore_weather,
     )
+    sequencer.set_adjustment_provider(coordinator.current_adjustment)
 
     scheduler = ProgramScheduler(
         hass=hass,
@@ -212,6 +229,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator.start_state_tracking()
     coordinator.start_leak_tracking()
+    coordinator.start_weather_tracking()
     scheduler.reload()
 
     if not hass.services.has_service(DOMAIN, SERVICE_START_PROGRAM):

@@ -4,6 +4,36 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.9.0 — 2026-04-20
+
+### Added
+- New optional **weather-based runtime adjustment**. Pick any `sensor.*`
+  that reports a dimensionless factor in the Advanced options step; the
+  sequencer multiplies every zone duration by that factor at program
+  start (example: a 10-minute zone with factor 0.8 waters for 8 min).
+  The factor sensor is tracked live via a state subscription and
+  revalidated every 30 s as a safety net. Sensor values are clamped to
+  `[0.0, 2.0]`; `unknown` / `unavailable` fall back to 1.0 (no
+  adjustment). A factor of 0 skips the zone entirely (no valve open,
+  no deadman) and emits `EVENT_ZONE_STARTED` with `skipped=true`.
+- New `Ignore Weather Adjustment` switch – when ON, every zone runs
+  its full configured duration regardless of the factor sensor. The
+  toggle is persisted across restarts.
+- New `Weather Factor` sensor showing the currently cached factor, the
+  configured source entity and whether the ignore-switch is active.
+
+### Changed
+- The factor is captured once at program start and stays constant for
+  the run – a sensor wobble mid-program cannot change the countdown.
+- `EVENT_PROGRAM_STARTED` gained `weather_factor` and `weather_ignored`
+  fields; `EVENT_ZONE_STARTED` now includes `base_duration_seconds`,
+  `weather_factor` and `skipped`.
+
+### Safety
+- The per-zone deadman is unchanged and keeps hard-capping runtime at
+  `max_runtime_minutes`, so a factor of 2.0 can never push a zone past
+  the configured safety limit.
+
 ## v0.8.1 — 2026-04-20
 
 Re-release of v0.8.0. The v0.8.0 tag on GitHub was placed on a commit
