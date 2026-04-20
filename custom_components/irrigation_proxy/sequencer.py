@@ -421,8 +421,18 @@ class Sequencer:
             self._run(), "irrigation_proxy_sequencer"
         )
 
-    async def stop(self) -> None:
-        """Stop the sequencer program and close any open valves."""
+    async def stop(self, *, skip_depressurize: bool = False) -> None:
+        """Stop the sequencer program and close any open valves.
+
+        If a zone was actively being watered at the moment of the stop and
+        a master valve with a non-zero depressurize delay is configured,
+        the master is closed first and the zone valve only follows after
+        the drain wait – same safety sequence as a normal zone completion.
+
+        ``skip_depressurize=True`` bypasses the drain wait unconditionally
+        (used by the leak-emergency path, where every second of flow
+        matters more than protecting hose fittings).
+        """
         if self._state == SequencerState.IDLE:
             return
 
@@ -431,6 +441,13 @@ class Sequencer:
         # Capture before _reset() clears them.
         zone_to_close = self._current_zone
         zone_index = self._current_index
+        # "Watering" means water is currently flowing through this zone –
+        # master open, zone open. The main-loop sets _zone_started_at right
+        # before the duration sleep and clears it right after, so this is
+        # the precise window in which a depressurize makes sense.
+        was_watering = (
+            zone_to_close is not None and self._zone_started_at is not None
+        )
 
         # Cancel the task
         if self._task is not None and not self._task.done():
@@ -440,8 +457,34 @@ class Sequencer:
             except asyncio.CancelledError:
                 pass
 
-        # Safety: close master first (kills flow), then zone.
-        await self._close_master()
+        depressurize_ran = False
+        if (
+            was_watering
+            and not skip_depressurize
+            and self._master_valve
+            and self._depressurize_seconds > 0
+        ):
+            # Close master first (stops flow), then wait the configured
+            # drain time before we close the zone valve – identical to
+            # the normal per-zone completion path.
+            await self._close_master()
+            self._depressurize_started_at = datetime.now(timezone.utc)
+            self._depressurize_duration_seconds = self._depressurize_seconds
+            try:
+                await asyncio.sleep(self._depressurize_seconds)
+                depressurize_ran = True
+            except asyncio.CancelledError:
+                # HA shutdown / another stop() came in – fall through and
+                # still close the zone so we never leave it open.
+                pass
+            finally:
+                self._depressurize_started_at = None
+                self._depressurize_duration_seconds = 0
+        else:
+            # No watering phase (or caller asked to skip): close master
+            # immediately, same as the pre-0.8 behaviour.
+            await self._close_master()
+
         if zone_to_close is not None:
             try:
                 await zone_to_close.turn_off(self._hass)
@@ -462,6 +505,7 @@ class Sequencer:
                 "reason": "stopped",
                 "zone_name": zone_to_close.name if zone_to_close else None,
                 "zone_index": zone_index,
+                "depressurized": depressurize_ran,
             },
         )
 

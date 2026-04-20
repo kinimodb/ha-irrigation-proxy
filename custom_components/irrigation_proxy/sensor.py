@@ -19,6 +19,23 @@ from .coordinator import IrrigationCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
+def _format_mmss(seconds: int | None) -> str | None:
+    """Render *seconds* as ``MM:SS`` (or ``H:MM:SS`` when ≥ 1 h).
+
+    Returns ``None`` for ``None`` so HA renders ``unknown`` rather than
+    a zero-padded placeholder. Negatives are clamped to 0.
+    """
+    if seconds is None:
+        return None
+    s = max(0, int(seconds))
+    if s >= 3600:
+        h, rem = divmod(s, 3600)
+        m, sec = divmod(rem, 60)
+        return f"{h}:{m:02d}:{sec:02d}"
+    m, sec = divmod(s, 60)
+    return f"{m:02d}:{sec:02d}"
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -147,10 +164,12 @@ class CurrentZoneSensor(_BaseSensor):
 
 
 class ZoneTimeRemainingSensor(_BaseSensor):
-    """Seconds left on the current zone; idle fallback = first zone's duration."""
+    """Zone countdown as ``MM:SS``; idle fallback = first zone's duration."""
 
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = "s"
+    # No device_class / unit: HA renders DURATION sensors as raw seconds,
+    # which is exactly what we want to get rid of. The raw integer is
+    # still exposed via the `seconds_remaining` attribute so automations
+    # can keep doing numeric comparisons.
     _attr_icon = "mdi:timer-outline"
     _attr_translation_key = "zone_time_remaining"
 
@@ -163,26 +182,29 @@ class ZoneTimeRemainingSensor(_BaseSensor):
         self._attr_unique_id = f"{entry.entry_id}_zone_time_remaining"
         self._attr_name = "Zone Time Remaining"
 
-    @property
-    def native_value(self) -> int | None:
+    def _raw_seconds(self) -> int:
         seq = self._seq_data()
         if seq.get("state") == "running":
             remaining = seq.get("remaining_zone_seconds")
-            # During pause/depressurize between zones there is no active zone
-            # countdown – show 0 instead of falling back to the idle preview.
-            return 0 if remaining is None else remaining
+            return 0 if remaining is None else int(remaining)
 
         zones = seq.get("zones") or []
         if zones:
             return int(zones[0].get("duration_seconds") or 0)
         return 0
 
+    @property
+    def native_value(self) -> str | None:
+        return _format_mmss(self._raw_seconds())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"seconds_remaining": self._raw_seconds()}
+
 
 class ProgramTotalRemainingSensor(_BaseSensor):
-    """Seconds remaining across the whole program (or total runtime when idle)."""
+    """Whole-program countdown as ``MM:SS`` (or ``H:MM:SS`` when ≥ 1 h)."""
 
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = "s"
     _attr_icon = "mdi:timer-sand"
     _attr_translation_key = "program_total_remaining"
 
@@ -195,9 +217,13 @@ class ProgramTotalRemainingSensor(_BaseSensor):
         self._attr_unique_id = f"{entry.entry_id}_program_total_remaining"
         self._attr_name = "Program Total Remaining"
 
+    def _raw_seconds(self) -> int | None:
+        value = self._seq_data().get("total_remaining_seconds")
+        return None if value is None else int(value)
+
     @property
-    def native_value(self) -> int | None:
-        return self._seq_data().get("total_remaining_seconds")
+    def native_value(self) -> str | None:
+        return _format_mmss(self._raw_seconds())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -205,6 +231,7 @@ class ProgramTotalRemainingSensor(_BaseSensor):
         # Breakdown so users can trace how the total is composed:
         #   total ≈ zones_remaining + pauses_remaining + depressurize_remaining
         return {
+            "seconds_remaining": self._raw_seconds(),
             "zones_remaining_seconds": seq.get("zones_total_remaining_seconds"),
             "pauses_remaining_seconds": seq.get("pauses_total_remaining_seconds"),
             "depressurize_remaining_seconds": (

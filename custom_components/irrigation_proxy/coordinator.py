@@ -188,7 +188,10 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         try:
-            await self.sequencer.stop()
+            # Leak emergency: every second of flow adds damage. Skip the
+            # drain wait even though a zone is watering – safety trumps
+            # hose-fitting protection here.
+            await self.sequencer.stop(skip_depressurize=True)
         except Exception:
             _LOGGER.exception(
                 "Coordinator: sequencer.stop() failed during leak emergency"

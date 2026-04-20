@@ -4,6 +4,37 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.8.0 — 2026-04-20
+
+### Added
+- New `Automatic Schedule` switch (`switch.<program>_automatic_schedule`)
+  mirrors the `schedule_enabled` flag from the options flow. Toggling it
+  re-registers the underlying time triggers live without reloading the
+  config entry, so a running program is never interrupted.
+- Per-zone `<Zone> Duration Seconds` number entity (0–59 s). Combined
+  with the existing minute value, zone runtimes can now be expressed as
+  `MM:SS` – the sequencer consumes `minutes * 60 + extra_seconds`. The
+  options flow `Add zone` / `Edit zone` steps expose the same field.
+
+### Changed
+- Rename `Program` switch to `Program (Manual Start/Stop)` to make the
+  intent explicit now that the separate `Automatic Schedule` switch
+  covers the scheduler toggle.
+- `Zone Time Remaining` and `Program Total Remaining` sensors now render
+  as `MM:SS` (or `H:MM:SS` beyond 1 h) instead of raw seconds. The
+  numeric value stays available on the `seconds_remaining` attribute
+  for automations and templates.
+
+### Safety
+- Manually stopping the program while a zone is actively watering now
+  runs the configured depressurize wait: master valve closes
+  immediately, zone valve only follows after the drain delay – the same
+  safety sequence as a normal zone completion. Stops during inter-zone
+  pause or an ongoing depressurize phase still close straight away
+  (nothing to drain). The leak-emergency path keeps its immediate
+  shutdown via a new `skip_depressurize=True` flag on
+  `Sequencer.stop()`.
+
 ## v0.7.4 — 2026-04-19
 
 ### Changed

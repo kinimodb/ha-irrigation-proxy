@@ -50,7 +50,8 @@
         "data": {
           "name": "Zonenname",
           "valve_entity_id": "Ventil-Entität",
-          "duration_minutes": "Dauer (Minuten)"
+          "duration_minutes": "Dauer (Minuten)",
+          "duration_extra_seconds": "Dauer (zusätzliche Sekunden, 0–59)"
         }
       },
       "zone_edit": {
@@ -60,6 +61,7 @@
           "name": "Zonenname",
           "valve_entity_id": "Ventil-Entität",
           "duration_minutes": "Dauer (Minuten)",
+          "duration_extra_seconds": "Dauer (zusätzliche Sekunden, 0–59)",
           "delete": "Diese Zone löschen"
         }
       },
@@ -117,7 +119,10 @@
   "entity": {
     "switch": {
       "program": {
-        "name": "Programm"
+        "name": "Programm (manuell starten/stoppen)"
+      },
+      "schedule_enabled": {
+        "name": "Automatischer Zeitplan"
       },
       "master_valve": {
         "name": "Hauptventil"
@@ -155,6 +160,9 @@
     "number": {
       "zone_duration": {
         "name": "Zonen-Laufzeit"
+      },
+      "zone_duration_seconds": {
+        "name": "Zonen-Laufzeit Sekunden"
       },
       "inter_zone_delay": {
         "name": "Pause zwischen Zonen"

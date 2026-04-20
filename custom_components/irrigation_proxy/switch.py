@@ -13,7 +13,12 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_NAME, DOMAIN
+from .const import (
+    CONF_NAME,
+    CONF_SCHEDULE_ENABLED,
+    DEFAULT_SCHEDULE_ENABLED,
+    DOMAIN,
+)
 from .coordinator import IrrigationCoordinator
 from .sequencer import SequencerState
 
@@ -28,7 +33,10 @@ async def async_setup_entry(
     """Set up switch entities from a config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[SwitchEntity] = [ProgramSwitch(coordinator, entry)]
+    entities: list[SwitchEntity] = [
+        ProgramSwitch(coordinator, entry),
+        ScheduleEnabledSwitch(coordinator, entry),
+    ]
     entities.extend(
         ZoneSwitch(coordinator, entry, zone.valve_entity_id)
         for zone in coordinator.zones
@@ -54,7 +62,7 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         super().__init__(coordinator)
         self._entry = entry
         self._attr_unique_id = f"{entry.entry_id}_program"
-        self._attr_name = "Program"
+        self._attr_name = "Program (Manual Start/Stop)"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -108,6 +116,72 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
             _LOGGER.info("Program switch removed while running – stopping program")
             await self.coordinator.sequencer.stop()
         await super().async_will_remove_from_hass()
+
+
+class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+    """Dashboard toggle for the automatic schedule.
+
+    Mirrors ``CONF_SCHEDULE_ENABLED`` from the options flow so the user
+    can pause / resume the weekly schedule without opening the config
+    dialog. Flipping the switch re-registers the underlying time
+    triggers via ``scheduler.reload()`` – no config-entry reload, so a
+    running program is not interrupted.
+    """
+
+    _attr_has_entity_name = True
+    _attr_device_class = SwitchDeviceClass.SWITCH
+    _attr_icon = "mdi:calendar-clock"
+    _attr_translation_key = "schedule_enabled"
+
+    def __init__(
+        self,
+        coordinator: IrrigationCoordinator,
+        entry: ConfigEntry,
+    ) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_schedule_enabled"
+        self._attr_name = "Automatic Schedule"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry.entry_id)},
+            name=self._entry.data.get(CONF_NAME, "Irrigation"),
+            manufacturer="Irrigation Proxy",
+            model="Virtual Irrigation Controller",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        raw = {**self._entry.data, **self._entry.options}
+        return bool(raw.get(CONF_SCHEDULE_ENABLED, DEFAULT_SCHEDULE_ENABLED))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        sched = self.coordinator.data.get("scheduler") if self.coordinator.data else None
+        return {
+            "next_scheduled_start": (sched or {}).get("next_fire"),
+            "last_scheduled_fire": (sched or {}).get("last_fire"),
+        }
+
+    async def _set_enabled(self, enabled: bool) -> None:
+        # Skip the options-update listener's config-entry reload (would
+        # tear down a running program). The scheduler picks the new
+        # value up via its own reload() call below.
+        self.coordinator.suppress_next_reload = True
+        new_data = {**self._entry.data, CONF_SCHEDULE_ENABLED: enabled}
+        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        if self.coordinator.scheduler is not None:
+            self.coordinator.scheduler.reload()
+        await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set_enabled(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set_enabled(False)
 
 
 class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):

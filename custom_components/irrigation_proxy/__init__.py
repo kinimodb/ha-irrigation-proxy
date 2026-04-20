@@ -19,6 +19,7 @@ from .const import (
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
+    CONF_ZONE_DURATION_EXTRA_SECONDS,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_ID,
     CONF_ZONE_NAME,
@@ -77,12 +78,17 @@ def _build_zones(raw: dict[str, Any]) -> list[Zone]:
             )
         except (TypeError, ValueError):
             duration = DEFAULT_DURATION_MINUTES
+        try:
+            extra_seconds = int(entry.get(CONF_ZONE_DURATION_EXTRA_SECONDS, 0) or 0)
+        except (TypeError, ValueError):
+            extra_seconds = 0
         zones.append(
             Zone(
                 name=name,
                 valve_entity_id=valve,
                 duration_minutes=max(1, duration),
                 zone_id=entry.get(CONF_ZONE_ID),
+                duration_extra_seconds=extra_seconds,
             )
         )
     return zones
@@ -224,7 +230,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "Irrigation Proxy: HA stopping – closing program and all valves"
         )
         scheduler.unregister()
-        await sequencer.stop()
+        # HA is shutting down – there may be no event loop left to wait on
+        # a depressurize sleep, and safety.emergency_shutdown closes every
+        # valve immediately afterwards anyway.
+        await sequencer.stop(skip_depressurize=True)
         await safety.emergency_shutdown(zones)
 
     entry.async_on_unload(
@@ -240,7 +249,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Irrigation Proxy config entry."""
     coordinator: IrrigationCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    await coordinator.sequencer.stop()
+    await coordinator.sequencer.stop(skip_depressurize=True)
     if coordinator.scheduler is not None:
         coordinator.scheduler.unregister()
     coordinator.stop_state_tracking()
