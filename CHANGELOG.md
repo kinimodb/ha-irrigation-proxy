@@ -4,7 +4,13 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
-## v0.8.0 — 2026-04-20
+## v0.8.1 — 2026-04-20
+
+Re-release of v0.8.0. The v0.8.0 tag on GitHub was placed on a commit
+that was later reverted (the sub-minute "Zone Duration Seconds" entity
+turned out to clutter the UI) and never made it into a real release.
+
+## v0.8.0 — 2026-04-20 (withdrawn)
 
 ### Added
 - New `Automatic Schedule` switch (`switch.<program>_automatic_schedule`)
