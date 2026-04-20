@@ -50,8 +50,7 @@
         "data": {
           "name": "Zone name",
           "valve_entity_id": "Valve entity",
-          "duration_minutes": "Duration (minutes)",
-          "duration_extra_seconds": "Duration (extra seconds, 0–59)"
+          "duration_minutes": "Duration (minutes)"
         }
       },
       "zone_edit": {
@@ -61,7 +60,6 @@
           "name": "Zone name",
           "valve_entity_id": "Valve entity",
           "duration_minutes": "Duration (minutes)",
-          "duration_extra_seconds": "Duration (extra seconds, 0–59)",
           "delete": "Delete this zone"
         }
       },
@@ -160,9 +158,6 @@
     "number": {
       "zone_duration": {
         "name": "Zone Duration"
-      },
-      "zone_duration_seconds": {
-        "name": "Zone Duration Seconds"
       },
       "inter_zone_delay": {
         "name": "Inter-Zone Delay"

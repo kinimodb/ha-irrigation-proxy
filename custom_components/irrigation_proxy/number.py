@@ -21,7 +21,6 @@ from .const import (
     CONF_INTER_ZONE_DELAY_SECONDS,
     CONF_MAX_RUNTIME_MINUTES,
     CONF_NAME,
-    CONF_ZONE_DURATION_EXTRA_SECONDS,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_VALVE,
     CONF_ZONES,
@@ -48,9 +47,6 @@ async def async_setup_entry(
 
     for zone in coordinator.zones:
         entities.append(ZoneDurationNumber(coordinator, entry, zone.valve_entity_id))
-        entities.append(
-            ZoneDurationSecondsNumber(coordinator, entry, zone.valve_entity_id)
-        )
 
     async_add_entities(entities)
 
@@ -98,12 +94,7 @@ class _BaseNumber(CoordinatorEntity[IrrigationCoordinator], NumberEntity):
 
 
 class ZoneDurationNumber(_BaseNumber):
-    """Per-zone base runtime in minutes, adjustable from dashboard.
-
-    Paired with ``ZoneDurationSecondsNumber`` (0–59 s) to give sub-minute
-    granularity – the sequencer consumes ``zone.duration_seconds`` which
-    sums both.
-    """
+    """Per-zone base runtime in minutes, adjustable from dashboard."""
 
     _attr_native_min_value = 1
     _attr_native_max_value = 120
@@ -141,77 +132,12 @@ class ZoneDurationNumber(_BaseNumber):
             return
         new_minutes = max(1, int(value))
         zone.duration_minutes = new_minutes
-        _LOGGER.info(
-            "Zone '%s' duration set to %d min (+%d s)",
-            zone.name,
-            new_minutes,
-            zone.duration_extra_seconds,
-        )
+        _LOGGER.info("Zone '%s' duration set to %d min", zone.name, new_minutes)
 
         zones_raw = list(self._entry.data.get(CONF_ZONES) or [])
         for entry in zones_raw:
             if entry.get(CONF_ZONE_VALVE) == self._valve_entity_id:
                 entry[CONF_ZONE_DURATION_MINUTES] = new_minutes
-                break
-        _persist_entry_data(
-            self.hass, self.coordinator, self._entry, {CONF_ZONES: zones_raw}
-        )
-        self.async_write_ha_state()
-
-
-class ZoneDurationSecondsNumber(_BaseNumber):
-    """Sub-minute seconds component of a zone's runtime (0–59).
-
-    Works together with ``ZoneDurationNumber`` (minutes). The effective
-    total used by the sequencer is ``minutes * 60 + extra_seconds``.
-    """
-
-    _attr_native_min_value = 0
-    _attr_native_max_value = 59
-    _attr_native_step = 1
-    _attr_native_unit_of_measurement = "s"
-    _attr_device_class = NumberDeviceClass.DURATION
-    _attr_icon = "mdi:timer-sand"
-    _attr_translation_key = "zone_duration_seconds"
-
-    def __init__(
-        self,
-        coordinator: IrrigationCoordinator,
-        entry: ConfigEntry,
-        valve_entity_id: str,
-    ) -> None:
-        super().__init__(coordinator, entry)
-        self._valve_entity_id = valve_entity_id
-        zone = coordinator.zones_by_valve[valve_entity_id]
-        self._attr_unique_id = (
-            f"{entry.entry_id}_{valve_entity_id}_duration_seconds_number"
-        )
-        self._attr_name = f"{zone.name} Duration Seconds"
-
-    @property
-    def native_value(self) -> float:
-        zone = self.coordinator.zones_by_valve.get(self._valve_entity_id)
-        if zone is None:
-            return 0
-        return zone.duration_extra_seconds
-
-    async def async_set_native_value(self, value: float) -> None:
-        zone = self.coordinator.zones_by_valve.get(self._valve_entity_id)
-        if zone is None:
-            return
-        new_seconds = max(0, min(59, int(value)))
-        zone.duration_extra_seconds = new_seconds
-        _LOGGER.info(
-            "Zone '%s' duration set to %d min (+%d s)",
-            zone.name,
-            zone.duration_minutes,
-            new_seconds,
-        )
-
-        zones_raw = list(self._entry.data.get(CONF_ZONES) or [])
-        for entry in zones_raw:
-            if entry.get(CONF_ZONE_VALVE) == self._valve_entity_id:
-                entry[CONF_ZONE_DURATION_EXTRA_SECONDS] = new_seconds
                 break
         _persist_entry_data(
             self.hass, self.coordinator, self._entry, {CONF_ZONES: zones_raw}

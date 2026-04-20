@@ -19,7 +19,6 @@ from .const import (
     CONF_SCHEDULE_ENABLED,
     CONF_SCHEDULE_START_TIMES,
     CONF_SCHEDULE_WEEKDAYS,
-    CONF_ZONE_DURATION_EXTRA_SECONDS,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_ID,
     CONF_ZONE_NAME,
@@ -78,17 +77,12 @@ def _build_zones(raw: dict[str, Any]) -> list[Zone]:
             )
         except (TypeError, ValueError):
             duration = DEFAULT_DURATION_MINUTES
-        try:
-            extra_seconds = int(entry.get(CONF_ZONE_DURATION_EXTRA_SECONDS, 0) or 0)
-        except (TypeError, ValueError):
-            extra_seconds = 0
         zones.append(
             Zone(
                 name=name,
                 valve_entity_id=valve,
                 duration_minutes=max(1, duration),
                 zone_id=entry.get(CONF_ZONE_ID),
-                duration_extra_seconds=extra_seconds,
             )
         )
     return zones
