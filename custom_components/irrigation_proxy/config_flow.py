@@ -110,11 +110,14 @@ def _depressurize_field() -> Any:
 
 
 def _weekday_field() -> Any:
+    # LIST mode renders one checkbox per option, which makes the field
+    # idempotent across edits – the dropdown variant let users remove days
+    # but not re-add them once the form was reopened with a populated default.
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
             multiple=True,
             options=list(WEEKDAYS),
-            mode=selector.SelectSelectorMode.DROPDOWN,
+            mode=selector.SelectSelectorMode.LIST,
             translation_key="weekdays",
         )
     )
