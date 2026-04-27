@@ -373,6 +373,15 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         zone = zones_by_valve[valve_id]
         zone.update_state(state_str)
 
+        # Adopt zones opened outside of the proxy immediately, so the deadman
+        # is armed without waiting for the next 30 s coordinator poll.
+        if zone.is_on and valve_id not in self.safety.zone_start_times:
+            _LOGGER.info(
+                "Coordinator: zone '%s' opened outside of proxy – adopting with deadman",
+                zone.name,
+            )
+            self.safety.start_deadman(zone)
+
         data = dict(self.data or {})
         entry = dict(data.get(valve_id, {}))
         entry.update(
@@ -465,16 +474,17 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Coordinator: entity %s unavailable during poll", valve_id
                 )
 
-            # Orphan detection
+            # Adopt zones opened outside of the proxy: keep them running but
+            # arm a normal deadman so max_runtime still bounds the open time.
             if (
                 zone.is_on
                 and valve_id not in self.safety.zone_start_times
             ):
-                _LOGGER.warning(
-                    "Coordinator: zone '%s' is on with no deadman timer – forcing close",
+                _LOGGER.info(
+                    "Coordinator: zone '%s' opened outside of proxy – adopting with deadman",
                     zone.name,
                 )
-                await zone.force_close(self.hass)
+                self.safety.start_deadman(zone)
 
             data[valve_id] = {
                 "is_on": zone.is_on,

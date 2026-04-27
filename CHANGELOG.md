@@ -4,6 +4,25 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.9.1 — 2026-04-27
+
+### Changed
+- Adopt zones opened outside of the proxy (e.g. manual flow tests on the
+  underlying `switch.*` entity) instead of force-closing them after 30 s.
+  The coordinator now arms a normal deadman timer on the orphan-open
+  valve – both at the next 30 s poll and immediately on the state-change
+  event – so manual operations are no longer cut short.
+
+### Fixed
+- Weekday picker in the options flow now lets you re-add weekdays after
+  removing them. Switched the selector from a multi-select dropdown to
+  a checkbox list so existing programs can be edited without deleting
+  and re-creating them.
+
+### Safety
+- Adopted zones are still hard-capped at `max_runtime` – the deadman
+  contract is unchanged.
+
 ## v0.9.0 — 2026-04-20
 
 ### Added
