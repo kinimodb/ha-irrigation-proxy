@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Irrigation Proxy" width="128">
+  <img src="https://raw.githubusercontent.com/kinimodb/ha-irrigation-proxy/main/logo.png" alt="Irrigation Proxy" width="128">
 </p>
 
 # ha-irrigation-proxy

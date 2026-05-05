@@ -2,6 +2,5 @@
   "name": "Irrigation Proxy",
   "content_in_root": false,
   "render_readme": true,
-  "homeassistant": "2022.9.0",
-  "icon": "https://raw.githubusercontent.com/kinimodb/ha-irrigation-proxy/main/logo.png"
+  "homeassistant": "2022.9.0"
 }
