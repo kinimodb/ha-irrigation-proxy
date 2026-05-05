@@ -4,6 +4,14 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.9.4 — 2026-05-05
+
+### Changed
+- Rewrite README in a plain, usability-focused style modelled on
+  ha-tadox-proxy: prerequisites, installation, configuration table,
+  feature sections, services and entities. Removed the marketing-style
+  banner.
+
 ## v0.9.1 — 2026-04-27
 
 ### Changed
