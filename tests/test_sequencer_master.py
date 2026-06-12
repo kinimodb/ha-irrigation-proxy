@@ -226,7 +226,7 @@ class TestValveDomainMaster:
 
 
 class TestMasterCloseFailed:
-    """W1: when `_close_master` exhausts its retries, the user must be told."""
+    """W1: when `close_master` exhausts its retries, the user must be told."""
 
     def _build(
         self,
@@ -272,11 +272,11 @@ class TestMasterCloseFailed:
     @pytest.mark.asyncio
     async def test_returns_false_when_retries_exhausted(self) -> None:
         seq, hass, _ = self._build()
-        # Manually drive _close_master with a pre-opened master.
+        # Manually drive close_master with a pre-opened master.
         hass.states.get.side_effect = lambda eid: {MASTER: FakeState("on")}.get(eid)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = await seq._close_master()
+            result = await seq.close_master()
 
         assert result is False, "expected False when master stays open"
 
@@ -305,7 +305,7 @@ class TestMasterCloseFailed:
         )
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            result = await seq._close_master()
+            result = await seq.close_master()
 
         assert result is True
 
@@ -323,7 +323,7 @@ class TestMasterCloseFailed:
             pause_seconds=0,
             master_valve_entity_id=None,
         )
-        assert await seq._close_master() is True
+        assert await seq.close_master() is True
         # No event must be fired for the no-master case.
         hass.bus.async_fire.assert_not_called()
 
@@ -333,7 +333,7 @@ class TestMasterCloseFailed:
         hass.states.get.side_effect = lambda eid: {MASTER: FakeState("on")}.get(eid)
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
-            await seq._close_master()
+            await seq.close_master()
 
         fired = [
             call.args for call in hass.bus.async_fire.call_args_list
@@ -356,7 +356,7 @@ class TestMasterCloseFailed:
             "sys.modules",
             {"homeassistant.components.persistent_notification": fake_pn},
         ), patch("asyncio.sleep", new_callable=AsyncMock):
-            await seq._close_master()
+            await seq.close_master()
 
         fake_pn.async_create.assert_called_once()
         _args, kwargs = fake_pn.async_create.call_args

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -26,7 +27,7 @@ from .const import (
 )
 from .safety import SafetyManager
 from .sequencer import Sequencer, SequencerState
-from .zone import Zone, entity_svc_close
+from .zone import Zone, async_call_close
 
 if TYPE_CHECKING:
     from .scheduler import ProgramScheduler
@@ -50,6 +51,10 @@ def _parse_weather_factor(raw: Any) -> float:
     try:
         value = float(text)
     except (TypeError, ValueError):
+        return DEFAULT_WEATHER_FACTOR
+    # NaN würde durch min/max-Clamping unbemerkt durchrutschen (Vergleiche
+    # mit NaN sind immer False) und könnte als Faktor 2.0 enden.
+    if not math.isfinite(value):
         return DEFAULT_WEATHER_FACTOR
     return max(WEATHER_FACTOR_MIN, min(WEATHER_FACTOR_MAX, value))
 
@@ -76,6 +81,11 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.entry = entry
         self.zones: list[Zone] = list(zones)
+        # Die Zonenliste ändert sich nach dem Setup nicht mehr (ein Reload
+        # erzeugt einen neuen Coordinator) – das Mapping kann gecacht werden.
+        self._zones_by_valve: dict[str, Zone] = {
+            z.valve_entity_id: z for z in self.zones
+        }
         self.safety = safety
         self.sequencer = sequencer
         self.scheduler: ProgramScheduler | None = None
@@ -100,12 +110,60 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def zones_by_valve(self) -> dict[str, Zone]:
-        return {z.valve_entity_id: z for z in self.zones}
+        return self._zones_by_valve
+
+    def _zone_snapshot(self, zone: Zone) -> dict[str, Any]:
+        """Status-Dict einer Zone für coordinator.data (eine Quelle für
+        Poll, State-Change-Event und 1-Hz-Tick)."""
+        return {
+            "is_on": zone.is_on,
+            "name": zone.name,
+            "valve_entity_id": zone.valve_entity_id,
+            "expected_state": zone.expected_state,
+            "state_mismatch": zone.state_mismatch,
+            "remaining_seconds": self.safety.remaining_seconds(
+                zone.valve_entity_id
+            ),
+            "duration_minutes": zone.duration_minutes,
+        }
+
+    def _maybe_adopt_zone(self, zone: Zone) -> None:
+        """Arm a deadman for a zone that was opened outside of the proxy.
+
+        Keeps manual flow tests running but still bounds the open time at
+        ``max_runtime``. No-op when the zone is closed or already tracked.
+        """
+        if (
+            zone.is_on
+            and zone.valve_entity_id not in self.safety.zone_start_times
+        ):
+            _LOGGER.info(
+                "Coordinator: zone '%s' opened outside of proxy – adopting with deadman",
+                zone.name,
+            )
+            self.safety.start_deadman(zone)
 
     # -- Public lifecycle -----------------------------------------------
 
     def set_scheduler(self, scheduler: ProgramScheduler) -> None:
         self.scheduler = scheduler
+
+    def persist_entry_data(self, updates: dict[str, Any]) -> None:
+        """Persist live-tunable values into ``entry.data`` without a reload.
+
+        Update listeners get notified for any data change, which would
+        normally re-instantiate the coordinator and abort a running program.
+        The coordinator already holds the new live values – setting
+        ``suppress_next_reload`` lets the listener skip the reload exactly
+        once. The flag is only set when the data actually changes; otherwise
+        ``async_update_entry`` never notifies the listener and a stale flag
+        would suppress the *next* legitimate reload.
+        """
+        new_data = {**self.entry.data, **updates}
+        if new_data == dict(self.entry.data):
+            return
+        self.suppress_next_reload = True
+        self.hass.config_entries.async_update_entry(self.entry, data=new_data)
 
     def start_state_tracking(self) -> None:
         """Subscribe to underlying valve state changes."""
@@ -285,47 +343,44 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         try:
-            # Leak emergency: every second of flow adds damage. Skip the
-            # drain wait even though a zone is watering – safety trumps
-            # hose-fitting protection here.
-            await self.sequencer.stop(skip_depressurize=True)
-        except Exception:
-            _LOGGER.exception(
-                "Coordinator: sequencer.stop() failed during leak emergency"
-            )
-
-        try:
-            await self.safety.emergency_shutdown(self.zones)
-        except Exception:
-            _LOGGER.exception(
-                "Coordinator: zone emergency shutdown failed during leak emergency"
-            )
-
-        master = self.sequencer.master_valve
-        if master:
             try:
-                svc_domain, svc_action = entity_svc_close(master)
-                await self.hass.services.async_call(
-                    svc_domain,
-                    svc_action,
-                    {"entity_id": master},
-                    blocking=True,
-                )
+                # Leak emergency: every second of flow adds damage. Skip the
+                # drain wait even though a zone is watering – safety trumps
+                # hose-fitting protection here.
+                await self.sequencer.stop(skip_depressurize=True)
             except Exception:
                 _LOGGER.exception(
-                    "Coordinator: failed to close master valve %s during leak emergency",
-                    master,
+                    "Coordinator: sequencer.stop() failed during leak emergency"
                 )
 
-        self._create_leak_notification(sensor_id, state)
+            try:
+                await self.safety.emergency_shutdown(self.zones)
+            except Exception:
+                _LOGGER.exception(
+                    "Coordinator: zone emergency shutdown failed during leak emergency"
+                )
 
-        self.notify_sequencer_state_changed()
-        try:
-            await self.async_request_refresh()
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("Coordinator: refresh after leak emergency failed")
+            master = self.sequencer.master_valve
+            if master:
+                try:
+                    await async_call_close(self.hass, master)
+                except Exception:
+                    _LOGGER.exception(
+                        "Coordinator: failed to close master valve %s during leak emergency",
+                        master,
+                    )
 
-        self._leak_emergency_active = False
+            self._create_leak_notification(sensor_id, state)
+
+            self.notify_sequencer_state_changed()
+            try:
+                await self.async_request_refresh()
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Coordinator: refresh after leak emergency failed")
+        finally:
+            # Immer zurücksetzen – sonst würde ein unerwarteter Fehler alle
+            # zukünftigen Leak-Ereignisse dauerhaft blockieren.
+            self._leak_emergency_active = False
 
     def _create_leak_notification(
         self, sensor_id: str | None, state: str
@@ -364,38 +419,20 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         new_state = event.data.get("new_state")
         state_str = new_state.state if new_state is not None else "unavailable"
 
-        zones_by_valve = self.zones_by_valve
-        if valve_id not in zones_by_valve:
+        zone = self.zones_by_valve.get(valve_id)
+        if zone is None:
             # Likely the master valve – just trigger a refresh snapshot.
             self._refresh_timer_snapshot()
             return
 
-        zone = zones_by_valve[valve_id]
         zone.update_state(state_str)
 
         # Adopt zones opened outside of the proxy immediately, so the deadman
         # is armed without waiting for the next 30 s coordinator poll.
-        if zone.is_on and valve_id not in self.safety.zone_start_times:
-            _LOGGER.info(
-                "Coordinator: zone '%s' opened outside of proxy – adopting with deadman",
-                zone.name,
-            )
-            self.safety.start_deadman(zone)
+        self._maybe_adopt_zone(zone)
 
         data = dict(self.data or {})
-        entry = dict(data.get(valve_id, {}))
-        entry.update(
-            {
-                "is_on": zone.is_on,
-                "name": zone.name,
-                "valve_entity_id": valve_id,
-                "expected_state": zone.expected_state,
-                "state_mismatch": zone.state_mismatch,
-                "remaining_seconds": self.safety.remaining_seconds(valve_id),
-                "duration_minutes": zone.duration_minutes,
-            }
-        )
-        data[valve_id] = entry
+        data[valve_id] = self._zone_snapshot(zone)
         self.async_set_updated_data(data)
 
     # -- 1 Hz tick while running ----------------------------------------
@@ -439,16 +476,7 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         data["sequencer"] = self.sequencer.progress
 
         for zone in self.zones:
-            valve_id = zone.valve_entity_id
-            entry = dict(data.get(valve_id, {}))
-            entry.setdefault("name", zone.name)
-            entry.setdefault("valve_entity_id", valve_id)
-            entry["duration_minutes"] = zone.duration_minutes
-            entry["is_on"] = zone.is_on
-            entry["state_mismatch"] = zone.state_mismatch
-            entry["expected_state"] = zone.expected_state
-            entry["remaining_seconds"] = self.safety.remaining_seconds(valve_id)
-            data[valve_id] = entry
+            data[zone.valve_entity_id] = self._zone_snapshot(zone)
 
         self.async_set_updated_data(data)
 
@@ -476,25 +504,9 @@ class IrrigationCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Adopt zones opened outside of the proxy: keep them running but
             # arm a normal deadman so max_runtime still bounds the open time.
-            if (
-                zone.is_on
-                and valve_id not in self.safety.zone_start_times
-            ):
-                _LOGGER.info(
-                    "Coordinator: zone '%s' opened outside of proxy – adopting with deadman",
-                    zone.name,
-                )
-                self.safety.start_deadman(zone)
+            self._maybe_adopt_zone(zone)
 
-            data[valve_id] = {
-                "is_on": zone.is_on,
-                "name": zone.name,
-                "valve_entity_id": valve_id,
-                "expected_state": zone.expected_state,
-                "state_mismatch": zone.state_mismatch,
-                "remaining_seconds": self.safety.remaining_seconds(valve_id),
-                "duration_minutes": zone.duration_minutes,
-            }
+            data[valve_id] = self._zone_snapshot(zone)
 
         await self.safety.check_overruns(self.zones)
 

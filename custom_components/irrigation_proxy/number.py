@@ -12,21 +12,27 @@ from homeassistant.components.number import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DEPRESSURIZE_SECONDS,
     CONF_INTER_ZONE_DELAY_SECONDS,
     CONF_MAX_RUNTIME_MINUTES,
-    CONF_NAME,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_VALVE,
     CONF_ZONES,
+    DEPRESSURIZE_MAX_SECONDS,
+    DEPRESSURIZE_MIN_SECONDS,
     DOMAIN,
+    INTER_ZONE_DELAY_MAX_SECONDS,
+    INTER_ZONE_DELAY_MIN_SECONDS,
+    MAX_RUNTIME_MAX_MINUTES,
+    MAX_RUNTIME_MIN_MINUTES,
+    ZONE_DURATION_MAX_MINUTES,
+    ZONE_DURATION_MIN_MINUTES,
 )
 from .coordinator import IrrigationCoordinator
+from .entity import IrrigationProxyEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,53 +57,17 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-def _persist_entry_data(
-    hass: HomeAssistant,
-    coordinator: IrrigationCoordinator,
-    entry: ConfigEntry,
-    updates: dict[str, Any],
-) -> None:
-    """Persist runtime tweaks into the config entry without triggering a reload.
+class _BaseNumber(IrrigationProxyEntity, NumberEntity):
+    """Base class for irrigation number entities – shared box mode."""
 
-    Update listeners get notified for any data change, which would normally
-    re-instantiate the coordinator and abort a running program. The
-    coordinator already holds the new live values – setting
-    `suppress_next_reload` lets the listener skip the reload exactly once.
-    """
-    coordinator.suppress_next_reload = True
-    new_data = {**entry.data, **updates}
-    hass.config_entries.async_update_entry(entry, data=new_data)
-
-
-class _BaseNumber(CoordinatorEntity[IrrigationCoordinator], NumberEntity):
-    """Base class for irrigation number entities – shared device grouping."""
-
-    _attr_has_entity_name = True
     _attr_mode = NumberMode.BOX
-
-    def __init__(
-        self,
-        coordinator: IrrigationCoordinator,
-        entry: ConfigEntry,
-    ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
 
 class ZoneDurationNumber(_BaseNumber):
     """Per-zone base runtime in minutes, adjustable from dashboard."""
 
-    _attr_native_min_value = 1
-    _attr_native_max_value = 120
+    _attr_native_min_value = ZONE_DURATION_MIN_MINUTES
+    _attr_native_max_value = ZONE_DURATION_MAX_MINUTES
     _attr_native_step = 1
     _attr_native_unit_of_measurement = "min"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -134,22 +104,22 @@ class ZoneDurationNumber(_BaseNumber):
         zone.duration_minutes = new_minutes
         _LOGGER.info("Zone '%s' duration set to %d min", zone.name, new_minutes)
 
-        zones_raw = list(self._entry.data.get(CONF_ZONES) or [])
-        for entry in zones_raw:
-            if entry.get(CONF_ZONE_VALVE) == self._valve_entity_id:
-                entry[CONF_ZONE_DURATION_MINUTES] = new_minutes
+        # Die Zonen-Dicts kopieren statt in-place zu mutieren: HA erkennt
+        # die Änderung an entry.data sonst nicht und speichert sie nie.
+        zones_raw = [dict(z) for z in (self._entry.data.get(CONF_ZONES) or [])]
+        for zone_conf in zones_raw:
+            if zone_conf.get(CONF_ZONE_VALVE) == self._valve_entity_id:
+                zone_conf[CONF_ZONE_DURATION_MINUTES] = new_minutes
                 break
-        _persist_entry_data(
-            self.hass, self.coordinator, self._entry, {CONF_ZONES: zones_raw}
-        )
+        self.coordinator.persist_entry_data({CONF_ZONES: zones_raw})
         self.async_write_ha_state()
 
 
 class InterZoneDelayNumber(_BaseNumber):
     """Pause between zones in seconds."""
 
-    _attr_native_min_value = 0
-    _attr_native_max_value = 600
+    _attr_native_min_value = INTER_ZONE_DELAY_MIN_SECONDS
+    _attr_native_max_value = INTER_ZONE_DELAY_MAX_SECONDS
     _attr_native_step = 5
     _attr_native_unit_of_measurement = "s"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -175,11 +145,8 @@ class InterZoneDelayNumber(_BaseNumber):
         new_seconds = max(0, int(value))
         self.coordinator.sequencer.pause_seconds = new_seconds
         _LOGGER.info("Inter-zone delay set to %ds", new_seconds)
-        _persist_entry_data(
-            self.hass,
-            self.coordinator,
-            self._entry,
-            {CONF_INTER_ZONE_DELAY_SECONDS: new_seconds},
+        self.coordinator.persist_entry_data(
+            {CONF_INTER_ZONE_DELAY_SECONDS: new_seconds}
         )
         self.async_write_ha_state()
 
@@ -187,8 +154,8 @@ class InterZoneDelayNumber(_BaseNumber):
 class MaxRuntimeNumber(_BaseNumber):
     """Deadman timer max runtime per zone in minutes."""
 
-    _attr_native_min_value = 5
-    _attr_native_max_value = 180
+    _attr_native_min_value = MAX_RUNTIME_MIN_MINUTES
+    _attr_native_max_value = MAX_RUNTIME_MAX_MINUTES
     _attr_native_step = 5
     _attr_native_unit_of_measurement = "min"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -214,11 +181,8 @@ class MaxRuntimeNumber(_BaseNumber):
         new_minutes = max(1, int(value))
         self.coordinator.safety.max_runtime_minutes = new_minutes
         _LOGGER.info("Max runtime set to %d min", new_minutes)
-        _persist_entry_data(
-            self.hass,
-            self.coordinator,
-            self._entry,
-            {CONF_MAX_RUNTIME_MINUTES: new_minutes},
+        self.coordinator.persist_entry_data(
+            {CONF_MAX_RUNTIME_MINUTES: new_minutes}
         )
         self.async_write_ha_state()
 
@@ -226,8 +190,8 @@ class MaxRuntimeNumber(_BaseNumber):
 class DepressurizeSecondsNumber(_BaseNumber):
     """Drain delay between closing the master valve and the zone valve."""
 
-    _attr_native_min_value = 0
-    _attr_native_max_value = 60
+    _attr_native_min_value = DEPRESSURIZE_MIN_SECONDS
+    _attr_native_max_value = DEPRESSURIZE_MAX_SECONDS
     _attr_native_step = 1
     _attr_native_unit_of_measurement = "s"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -253,10 +217,7 @@ class DepressurizeSecondsNumber(_BaseNumber):
         new_seconds = max(0, int(value))
         self.coordinator.sequencer.depressurize_seconds = new_seconds
         _LOGGER.info("Depressurize delay set to %ds", new_seconds)
-        _persist_entry_data(
-            self.hass,
-            self.coordinator,
-            self._entry,
-            {CONF_DEPRESSURIZE_SECONDS: new_seconds},
+        self.coordinator.persist_entry_data(
+            {CONF_DEPRESSURIZE_SECONDS: new_seconds}
         )
         self.async_write_ha_state()

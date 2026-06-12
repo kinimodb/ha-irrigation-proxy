@@ -2,6 +2,8 @@
 
 from typing import Final
 
+from homeassistant.const import Platform
+
 DOMAIN: Final = "irrigation_proxy"
 
 # -- Config keys -----------------------------------------------------------
@@ -64,6 +66,17 @@ DEFAULT_INTER_ZONE_DELAY_SECONDS: Final = 30
 DEFAULT_DEPRESSURIZE_SECONDS: Final = 5
 DEFAULT_SCHEDULE_ENABLED: Final = False
 
+# -- Input bounds (shared by Number entities and the options flow) ----------
+
+ZONE_DURATION_MIN_MINUTES: Final = 1
+ZONE_DURATION_MAX_MINUTES: Final = 120
+MAX_RUNTIME_MIN_MINUTES: Final = 5
+MAX_RUNTIME_MAX_MINUTES: Final = 180
+INTER_ZONE_DELAY_MIN_SECONDS: Final = 0
+INTER_ZONE_DELAY_MAX_SECONDS: Final = 600
+DEPRESSURIZE_MIN_SECONDS: Final = 0
+DEPRESSURIZE_MAX_SECONDS: Final = 60
+
 # Weather factor bounds. Upper clamp stays below 2.0 so a sensor glitch can
 # at worst double the runtime – the per-zone deadman still hard-caps the
 # absolute time a valve may stay open.
@@ -102,4 +115,8 @@ SERVICE_STOP_PROGRAM: Final = "stop_program"
 
 # -- Platforms -------------------------------------------------------------
 
-PLATFORMS: Final[list[str]] = ["switch", "sensor", "number"]
+PLATFORMS: Final[list[Platform]] = [
+    Platform.SWITCH,
+    Platform.SENSOR,
+    Platform.NUMBER,
+]

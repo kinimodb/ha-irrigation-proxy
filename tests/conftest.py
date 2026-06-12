@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -39,6 +40,31 @@ def make_mock_hass(
     hass.loop.call_later = MagicMock()
     hass.async_create_task = MagicMock()
 
+    return hass
+
+
+def _create_task_side_effect(coro, *args, **kwargs):
+    """Schedule the coroutine when a loop is running, else discard it.
+
+    Sync tests (no running event loop under pytest-asyncio >= 1.0) only
+    assert that ``async_create_task`` was called – closing the coroutine
+    avoids both the RuntimeError and the "never awaited" warning.
+    """
+    try:
+        return asyncio.ensure_future(coro)
+    except RuntimeError:
+        coro.close()
+        return MagicMock()
+
+
+def make_mock_hass_with_bus(
+    states: dict[str, FakeState] | None = None,
+) -> MagicMock:
+    """Mock hass with a functional async_create_task and an event bus."""
+    hass = make_mock_hass(states)
+    hass.async_create_task = MagicMock(side_effect=_create_task_side_effect)
+    hass.bus = MagicMock()
+    hass.bus.async_fire = MagicMock()
     return hass
 
 

@@ -20,7 +20,6 @@ config entry when the user picks "Save & Close".
 from __future__ import annotations
 
 import logging
-import secrets
 from typing import Any
 
 import voluptuous as vol
@@ -49,10 +48,18 @@ from .const import (
     DEFAULT_INTER_ZONE_DELAY_SECONDS,
     DEFAULT_MAX_RUNTIME_MINUTES,
     DEFAULT_SCHEDULE_ENABLED,
+    DEPRESSURIZE_MAX_SECONDS,
+    DEPRESSURIZE_MIN_SECONDS,
     DOMAIN,
+    INTER_ZONE_DELAY_MAX_SECONDS,
+    INTER_ZONE_DELAY_MIN_SECONDS,
+    MAX_RUNTIME_MAX_MINUTES,
+    MAX_RUNTIME_MIN_MINUTES,
     WEEKDAYS,
+    ZONE_DURATION_MAX_MINUTES,
+    ZONE_DURATION_MIN_MINUTES,
 )
-from .migration import migrate_v1_zones
+from .migration import migrate_v1_zones, new_zone_id
 from .scheduler import format_start_times, parse_start_times
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,8 +71,8 @@ _LOGGER = logging.getLogger(__name__)
 def _duration_field() -> Any:
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
-            min=1,
-            max=120,
+            min=ZONE_DURATION_MIN_MINUTES,
+            max=ZONE_DURATION_MAX_MINUTES,
             step=1,
             mode=selector.NumberSelectorMode.BOX,
             unit_of_measurement="min",
@@ -76,8 +83,8 @@ def _duration_field() -> Any:
 def _max_runtime_field() -> Any:
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
-            min=5,
-            max=180,
+            min=MAX_RUNTIME_MIN_MINUTES,
+            max=MAX_RUNTIME_MAX_MINUTES,
             step=5,
             mode=selector.NumberSelectorMode.BOX,
             unit_of_measurement="min",
@@ -88,8 +95,8 @@ def _max_runtime_field() -> Any:
 def _inter_zone_delay_field() -> Any:
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
-            min=0,
-            max=600,
+            min=INTER_ZONE_DELAY_MIN_SECONDS,
+            max=INTER_ZONE_DELAY_MAX_SECONDS,
             step=5,
             mode=selector.NumberSelectorMode.BOX,
             unit_of_measurement="s",
@@ -100,8 +107,8 @@ def _inter_zone_delay_field() -> Any:
 def _depressurize_field() -> Any:
     return selector.NumberSelector(
         selector.NumberSelectorConfig(
-            min=0,
-            max=60,
+            min=DEPRESSURIZE_MIN_SECONDS,
+            max=DEPRESSURIZE_MAX_SECONDS,
             step=1,
             mode=selector.NumberSelectorMode.BOX,
             unit_of_measurement="s",
@@ -331,7 +338,7 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
                 errors[CONF_ZONE_VALVE] = "valve_required"
             else:
                 new_zone = {
-                    CONF_ZONE_ID: _new_zone_id(),
+                    CONF_ZONE_ID: new_zone_id(),
                     CONF_ZONE_NAME: user_input.get(CONF_ZONE_NAME) or valve,
                     CONF_ZONE_VALVE: valve,
                     CONF_ZONE_DURATION_MINUTES: int(
@@ -578,8 +585,3 @@ class IrrigationProxyOptionsFlow(OptionsFlow):
             self._config_entry, data=new_data
         )
         return self.async_create_entry(data={})
-
-
-def _new_zone_id() -> str:
-    """Return a short stable id for a zone."""
-    return f"z_{secrets.token_hex(4)}"

@@ -9,18 +9,16 @@ from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_IGNORE_WEATHER_ADJUSTMENT,
-    CONF_NAME,
     CONF_SCHEDULE_ENABLED,
     DEFAULT_SCHEDULE_ENABLED,
     DOMAIN,
 )
 from .coordinator import IrrigationCoordinator
+from .entity import IrrigationProxyEntity
 from .sequencer import SequencerState
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,10 +46,9 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+class ProgramSwitch(IrrigationProxyEntity, SwitchEntity):
     """Switch to start/stop the sequencer program."""
 
-    _attr_has_entity_name = True
     _attr_device_class = SwitchDeviceClass.SWITCH
     _attr_icon = "mdi:sprinkler-variant"
     _attr_translation_key = "program"
@@ -61,19 +58,9 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         coordinator: IrrigationCoordinator,
         entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
+        super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_program"
         self._attr_name = "Program (Manual Start/Stop)"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
     @property
     def is_on(self) -> bool:
@@ -120,7 +107,7 @@ class ProgramSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         await super().async_will_remove_from_hass()
 
 
-class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+class ScheduleEnabledSwitch(IrrigationProxyEntity, SwitchEntity):
     """Dashboard toggle for the automatic schedule.
 
     Mirrors ``CONF_SCHEDULE_ENABLED`` from the options flow so the user
@@ -130,7 +117,6 @@ class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEnti
     running program is not interrupted.
     """
 
-    _attr_has_entity_name = True
     _attr_device_class = SwitchDeviceClass.SWITCH
     _attr_icon = "mdi:calendar-clock"
     _attr_translation_key = "schedule_enabled"
@@ -140,19 +126,9 @@ class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEnti
         coordinator: IrrigationCoordinator,
         entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
+        super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_schedule_enabled"
         self._attr_name = "Automatic Schedule"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
     @property
     def is_on(self) -> bool:
@@ -171,9 +147,7 @@ class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEnti
         # Skip the options-update listener's config-entry reload (would
         # tear down a running program). The scheduler picks the new
         # value up via its own reload() call below.
-        self.coordinator.suppress_next_reload = True
-        new_data = {**self._entry.data, CONF_SCHEDULE_ENABLED: enabled}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.coordinator.persist_entry_data({CONF_SCHEDULE_ENABLED: enabled})
         if self.coordinator.scheduler is not None:
             self.coordinator.scheduler.reload()
         await self.coordinator.async_request_refresh()
@@ -186,9 +160,7 @@ class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEnti
         await self._set_enabled(False)
 
 
-class IgnoreWeatherAdjustmentSwitch(
-    CoordinatorEntity[IrrigationCoordinator], SwitchEntity
-):
+class IgnoreWeatherAdjustmentSwitch(IrrigationProxyEntity, SwitchEntity):
     """Dashboard toggle that bypasses the weather-based runtime factor.
 
     OFF (default) → the configured factor sensor shortens or extends the
@@ -197,7 +169,6 @@ class IgnoreWeatherAdjustmentSwitch(
     ``entry.data`` so it survives a Home Assistant restart.
     """
 
-    _attr_has_entity_name = True
     _attr_device_class = SwitchDeviceClass.SWITCH
     _attr_icon = "mdi:weather-sunny-off"
     _attr_translation_key = "ignore_weather_adjustment"
@@ -207,19 +178,9 @@ class IgnoreWeatherAdjustmentSwitch(
         coordinator: IrrigationCoordinator,
         entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
+        super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_ignore_weather"
         self._attr_name = "Ignore Weather Adjustment"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
     @property
     def is_on(self) -> bool:
@@ -235,10 +196,10 @@ class IgnoreWeatherAdjustmentSwitch(
     async def _set_enabled(self, enabled: bool) -> None:
         # Live-tunable – avoid a full config-entry reload which would stop
         # a running program.
-        self.coordinator.suppress_next_reload = True
         self.coordinator.ignore_weather = enabled
-        new_data = {**self._entry.data, CONF_IGNORE_WEATHER_ADJUSTMENT: enabled}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.coordinator.persist_entry_data(
+            {CONF_IGNORE_WEATHER_ADJUSTMENT: enabled}
+        )
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
@@ -249,10 +210,9 @@ class IgnoreWeatherAdjustmentSwitch(
         await self._set_enabled(False)
 
 
-class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+class ZoneSwitch(IrrigationProxyEntity, SwitchEntity):
     """Switch entity for a single irrigation zone."""
 
-    _attr_has_entity_name = True
     _attr_device_class = SwitchDeviceClass.SWITCH
 
     def __init__(
@@ -261,22 +221,12 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         entry: ConfigEntry,
         valve_entity_id: str,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
+        super().__init__(coordinator, entry)
         self._valve_entity_id = valve_entity_id
         self._zone = coordinator.zones_by_valve[valve_entity_id]
 
         self._attr_unique_id = f"{entry.entry_id}_{valve_entity_id}"
         self._attr_name = self._zone.name
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
     @property
     def is_on(self) -> bool | None:
@@ -329,7 +279,7 @@ class ZoneSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         await super().async_will_remove_from_hass()
 
 
-class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
+class MasterValveSwitch(IrrigationProxyEntity, SwitchEntity):
     """Manual override for the master / pump valve.
 
     Mirrors the underlying valve state so the user can confirm the actual
@@ -339,7 +289,6 @@ class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
     line under pressure indefinitely.
     """
 
-    _attr_has_entity_name = True
     _attr_device_class = SwitchDeviceClass.SWITCH
     _attr_icon = "mdi:water-pump"
     _attr_translation_key = "master_valve"
@@ -349,20 +298,10 @@ class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
         coordinator: IrrigationCoordinator,
         entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
+        super().__init__(coordinator, entry)
         self._master_entity_id = coordinator.sequencer.master_valve or ""
         self._attr_unique_id = f"{entry.entry_id}_master_valve"
         self._attr_name = "Master Valve"
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
     @property
     def is_on(self) -> bool | None:
@@ -394,14 +333,14 @@ class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         self._refuse_if_program_running()
 
-        result = await self.coordinator.sequencer._open_master()
+        result = await self.coordinator.sequencer.open_master()
         if result is False:
             raise HomeAssistantError(
                 f"Master valve {self._master_entity_id} did not verify open."
             )
 
         async def _close_on_deadman() -> None:
-            await self.coordinator.sequencer._close_master()
+            await self.coordinator.sequencer.close_master()
             await self.coordinator.async_request_refresh()
 
         self.coordinator.safety.start_master_deadman(
@@ -412,7 +351,7 @@ class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         self._refuse_if_program_running()
         self.coordinator.safety.cancel_master_deadman()
-        await self.coordinator.sequencer._close_master()
+        await self.coordinator.sequencer.close_master()
         await self.coordinator.async_request_refresh()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -422,7 +361,7 @@ class MasterValveSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEntity):
             )
             self.coordinator.safety.cancel_master_deadman()
             try:
-                await self.coordinator.sequencer._close_master()
+                await self.coordinator.sequencer.close_master()
             except Exception:
                 _LOGGER.exception(
                     "Master valve switch: failed to close master on remove"
