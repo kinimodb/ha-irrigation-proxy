@@ -222,7 +222,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator.notify_sequencer_state_changed()
         hass.async_create_task(coordinator.async_request_refresh())
 
-    sequencer._on_complete = _on_sequencer_complete
+    sequencer.set_on_complete(_on_sequencer_complete)
 
     await coordinator.async_config_entry_first_refresh()
 

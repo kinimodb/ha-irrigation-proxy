@@ -130,6 +130,10 @@ class Sequencer:
         """List of configured zones (read-only snapshot)."""
         return list(self._zones)
 
+    def set_on_complete(self, callback: Callable[[], Any] | None) -> None:
+        """Register the callback invoked after a program completes."""
+        self._on_complete = callback
+
     # -- Weather-based runtime adjustment ------------------------------
 
     def set_adjustment_provider(
@@ -545,7 +549,7 @@ class Sequencer:
             # Close master first (stops flow), then wait the configured
             # drain time before we close the zone valve – identical to
             # the normal per-zone completion path.
-            await self._close_master()
+            await self.close_master()
             self._depressurize_started_at = datetime.now(timezone.utc)
             self._depressurize_duration_seconds = self._depressurize_seconds
             try:
@@ -561,7 +565,7 @@ class Sequencer:
         else:
             # No watering phase (or caller asked to skip): close master
             # immediately, same as the pre-0.8 behaviour.
-            await self._close_master()
+            await self.close_master()
 
         if zone_to_close is not None:
             try:
@@ -689,7 +693,7 @@ class Sequencer:
                 )
 
                 # 2. Open master – water starts flowing.
-                master_opened = await self._open_master()
+                master_opened = await self.open_master()
                 if master_opened is False:
                     _LOGGER.error(
                         "Sequencer: master valve failed to open – aborting zone '%s'",
@@ -713,7 +717,7 @@ class Sequencer:
                     self._zone_started_at = None
 
                 # 4. Close master (stop flow)
-                await self._close_master()
+                await self.close_master()
 
                 # 5. Depressurize wait
                 if self._master_valve and self._depressurize_seconds > 0:
@@ -803,7 +807,7 @@ class Sequencer:
                     "zone_index": self._current_index,
                 },
             )
-            await self._close_master()
+            await self.close_master()
             if self._current_zone is not None:
                 try:
                     await self._current_zone.turn_off(self._hass)
@@ -820,7 +824,7 @@ class Sequencer:
 
     # -- Master valve helpers -------------------------------------------
 
-    async def _open_master(self) -> bool | None:
+    async def open_master(self) -> bool | None:
         """Open the master valve, verify state. Returns None if no master."""
         if not self._master_valve:
             return None
@@ -847,7 +851,7 @@ class Sequencer:
             return False
         return True
 
-    async def _close_master(self) -> bool:
+    async def close_master(self) -> bool:
         """Close the master valve (best-effort, with retries).
 
         Returns True when the valve is confirmed closed (or no master is

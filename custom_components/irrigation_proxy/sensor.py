@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_NAME, DOMAIN
+from .const import DOMAIN
 from .coordinator import IrrigationCoordinator
-
-_LOGGER = logging.getLogger(__name__)
+from .entity import IrrigationProxyEntity
 
 
 def _format_mmss(seconds: int | None) -> str | None:
@@ -58,27 +54,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class _BaseSensor(CoordinatorEntity[IrrigationCoordinator], SensorEntity):
-    """Base class for irrigation sensors – shared device grouping."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: IrrigationCoordinator,
-        entry: ConfigEntry,
-    ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
+class _BaseSensor(IrrigationProxyEntity, SensorEntity):
+    """Base class for irrigation sensors – shared data accessors."""
 
     def _seq_data(self) -> dict[str, Any]:
         if self.coordinator.data is None:

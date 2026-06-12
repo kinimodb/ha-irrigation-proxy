@@ -12,21 +12,27 @@ from homeassistant.components.number import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DEPRESSURIZE_SECONDS,
     CONF_INTER_ZONE_DELAY_SECONDS,
     CONF_MAX_RUNTIME_MINUTES,
-    CONF_NAME,
     CONF_ZONE_DURATION_MINUTES,
     CONF_ZONE_VALVE,
     CONF_ZONES,
+    DEPRESSURIZE_MAX_SECONDS,
+    DEPRESSURIZE_MIN_SECONDS,
     DOMAIN,
+    INTER_ZONE_DELAY_MAX_SECONDS,
+    INTER_ZONE_DELAY_MIN_SECONDS,
+    MAX_RUNTIME_MAX_MINUTES,
+    MAX_RUNTIME_MIN_MINUTES,
+    ZONE_DURATION_MAX_MINUTES,
+    ZONE_DURATION_MIN_MINUTES,
 )
 from .coordinator import IrrigationCoordinator
+from .entity import IrrigationProxyEntity
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,35 +57,17 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class _BaseNumber(CoordinatorEntity[IrrigationCoordinator], NumberEntity):
-    """Base class for irrigation number entities – shared device grouping."""
+class _BaseNumber(IrrigationProxyEntity, NumberEntity):
+    """Base class for irrigation number entities – shared box mode."""
 
-    _attr_has_entity_name = True
     _attr_mode = NumberMode.BOX
-
-    def __init__(
-        self,
-        coordinator: IrrigationCoordinator,
-        entry: ConfigEntry,
-    ) -> None:
-        super().__init__(coordinator)
-        self._entry = entry
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._entry.entry_id)},
-            name=self._entry.data.get(CONF_NAME, "Irrigation"),
-            manufacturer="Irrigation Proxy",
-            model="Virtual Irrigation Controller",
-        )
 
 
 class ZoneDurationNumber(_BaseNumber):
     """Per-zone base runtime in minutes, adjustable from dashboard."""
 
-    _attr_native_min_value = 1
-    _attr_native_max_value = 120
+    _attr_native_min_value = ZONE_DURATION_MIN_MINUTES
+    _attr_native_max_value = ZONE_DURATION_MAX_MINUTES
     _attr_native_step = 1
     _attr_native_unit_of_measurement = "min"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -130,8 +118,8 @@ class ZoneDurationNumber(_BaseNumber):
 class InterZoneDelayNumber(_BaseNumber):
     """Pause between zones in seconds."""
 
-    _attr_native_min_value = 0
-    _attr_native_max_value = 600
+    _attr_native_min_value = INTER_ZONE_DELAY_MIN_SECONDS
+    _attr_native_max_value = INTER_ZONE_DELAY_MAX_SECONDS
     _attr_native_step = 5
     _attr_native_unit_of_measurement = "s"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -166,8 +154,8 @@ class InterZoneDelayNumber(_BaseNumber):
 class MaxRuntimeNumber(_BaseNumber):
     """Deadman timer max runtime per zone in minutes."""
 
-    _attr_native_min_value = 5
-    _attr_native_max_value = 180
+    _attr_native_min_value = MAX_RUNTIME_MIN_MINUTES
+    _attr_native_max_value = MAX_RUNTIME_MAX_MINUTES
     _attr_native_step = 5
     _attr_native_unit_of_measurement = "min"
     _attr_device_class = NumberDeviceClass.DURATION
@@ -202,8 +190,8 @@ class MaxRuntimeNumber(_BaseNumber):
 class DepressurizeSecondsNumber(_BaseNumber):
     """Drain delay between closing the master valve and the zone valve."""
 
-    _attr_native_min_value = 0
-    _attr_native_max_value = 60
+    _attr_native_min_value = DEPRESSURIZE_MIN_SECONDS
+    _attr_native_max_value = DEPRESSURIZE_MAX_SECONDS
     _attr_native_step = 1
     _attr_native_unit_of_measurement = "s"
     _attr_device_class = NumberDeviceClass.DURATION

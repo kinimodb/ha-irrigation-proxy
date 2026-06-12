@@ -7,6 +7,7 @@ We only mock the specific HA modules our code actually imports.
 
 from __future__ import annotations
 
+import enum
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -57,6 +58,17 @@ if not _HA_AVAILABLE:
     ha_const.STATE_ON = "on"  # type: ignore[attr-defined]
     ha_const.STATE_OFF = "off"  # type: ignore[attr-defined]
     ha_const.EVENT_HOMEASSISTANT_STOP = "homeassistant_stop"  # type: ignore[attr-defined]
+
+    class _StubPlatform(str, enum.Enum):
+        """Mirror of homeassistant.const.Platform (subset we use)."""
+
+        BINARY_SENSOR = "binary_sensor"
+        NUMBER = "number"
+        SENSOR = "sensor"
+        SWITCH = "switch"
+        VALVE = "valve"
+
+    ha_const.Platform = _StubPlatform  # type: ignore[attr-defined]
 
     # --- homeassistant (root) ---
     _ensure_parent("homeassistant")
@@ -173,17 +185,29 @@ if not _HA_AVAILABLE:
     # --- homeassistant.components.switch ---
     ha_switch = _make_module("homeassistant.components.switch")
     ha_switch.SwitchEntity = type("SwitchEntity", (), {})  # type: ignore[attr-defined]
-    ha_switch.SwitchDeviceClass = MagicMock  # type: ignore[attr-defined]
+    ha_switch.SwitchDeviceClass = MagicMock()  # type: ignore[attr-defined]
 
     # --- homeassistant.components.sensor ---
     ha_sensor = _make_module("homeassistant.components.sensor")
     ha_sensor.SensorEntity = type("SensorEntity", (), {})  # type: ignore[attr-defined]
-    ha_sensor.SensorDeviceClass = MagicMock  # type: ignore[attr-defined]
+    ha_sensor.SensorDeviceClass = MagicMock()  # type: ignore[attr-defined]
+
+    # --- homeassistant.components.number ---
+    ha_number = _make_module("homeassistant.components.number")
+    ha_number.NumberEntity = type("NumberEntity", (), {})  # type: ignore[attr-defined]
+    ha_number.NumberDeviceClass = MagicMock()  # type: ignore[attr-defined]
+    ha_number.NumberMode = MagicMock()  # type: ignore[attr-defined]
 
     # --- homeassistant.components.binary_sensor ---
     ha_binary_sensor = _make_module("homeassistant.components.binary_sensor")
     ha_binary_sensor.BinarySensorEntity = type("BinarySensorEntity", (), {})  # type: ignore[attr-defined]
-    ha_binary_sensor.BinarySensorDeviceClass = MagicMock  # type: ignore[attr-defined]
+    ha_binary_sensor.BinarySensorDeviceClass = MagicMock()  # type: ignore[attr-defined]
+
+    # --- homeassistant.exceptions ---
+    ha_exceptions = _make_module("homeassistant.exceptions")
+    ha_exceptions.HomeAssistantError = type(  # type: ignore[attr-defined]
+        "HomeAssistantError", (Exception,), {}
+    )
 
     # --- homeassistant.helpers.aiohttp_client ---
     ha_aiohttp = _make_module("homeassistant.helpers.aiohttp_client")
