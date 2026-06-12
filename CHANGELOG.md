@@ -4,6 +4,35 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.9.5 — 2026-06-12
+
+### Changed
+- Refactor internals without functional changes: shared entity base
+  class, public sequencer API (`open_master` / `close_master` /
+  `set_on_complete`), deduplicated coordinator snapshot and adoption
+  logic, shared input-bound constants between Number entities and the
+  options flow.
+
+### Fixed
+- Persist zone duration changes made via the dashboard Number entity.
+  They were only applied in memory, were lost on the next Home
+  Assistant restart, and left a stale flag behind that silently skipped
+  the next options reload.
+- Treat a weather factor sensor reporting `NaN` as invalid (fall back
+  to factor 1.0). It previously slipped through the clamp and doubled
+  every zone runtime as factor 2.0.
+- Skip zones configured with a duplicate valve entity instead of
+  creating colliding entities.
+- Parse corrupt legacy duration values defensively during migration so
+  old v0.4 data cannot abort the integration setup.
+
+### Safety
+- Close the master valve and cancel its deadman timer on Home Assistant
+  shutdown even when no program is running. Previously a manually
+  opened master valve stayed open across a restart.
+- Always reset the leak-emergency guard after the shutdown sequence so
+  an unexpected error cannot block handling of future leak events.
+
 ## v0.9.4 — 2026-05-05
 
 ### Changed

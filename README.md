@@ -1,6 +1,6 @@
 # Irrigation Proxy
 
-![Version](https://img.shields.io/badge/version-0.9.4-blue)
+![Version](https://img.shields.io/badge/version-0.9.5-blue)
 ![HA](https://img.shields.io/badge/Home%20Assistant-2024.6%2B-41BDF5)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
