@@ -42,7 +42,7 @@ from .migration import migrate_v1_zones
 from .safety import SafetyManager
 from .scheduler import ProgramScheduler, ScheduleConfig, parse_start_times
 from .sequencer import Sequencer
-from .zone import Zone, entity_svc_close
+from .zone import Zone, async_call_close
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,17 +65,27 @@ def _build_zones(raw: dict[str, Any]) -> list[Zone]:
     raw = migrate_v1_zones(raw)  # defensive: handle un-migrated v0.4.x data
     zones_raw = raw.get(CONF_ZONES) or []
     zones: list[Zone] = []
-    for entry in zones_raw:
-        valve = entry.get(CONF_ZONE_VALVE)
+    seen_valves: set[str] = set()
+    for zone_conf in zones_raw:
+        valve = zone_conf.get(CONF_ZONE_VALVE)
         if not valve:
             _LOGGER.warning(
-                "Irrigation Proxy: skipping zone without valve entity: %r", entry
+                "Irrigation Proxy: skipping zone without valve entity: %r",
+                zone_conf,
             )
             continue
-        name = entry.get(CONF_ZONE_NAME) or valve
+        if valve in seen_valves:
+            # Doppelte Ventile würden zu unique_id-Kollisionen bei den
+            # Zone-Entities führen und das Valve→Zone-Mapping mehrdeutig machen.
+            _LOGGER.warning(
+                "Irrigation Proxy: skipping duplicate zone for valve %s", valve
+            )
+            continue
+        seen_valves.add(valve)
+        name = zone_conf.get(CONF_ZONE_NAME) or valve
         try:
             duration = int(
-                entry.get(CONF_ZONE_DURATION_MINUTES, DEFAULT_DURATION_MINUTES)
+                zone_conf.get(CONF_ZONE_DURATION_MINUTES, DEFAULT_DURATION_MINUTES)
             )
         except (TypeError, ValueError):
             duration = DEFAULT_DURATION_MINUTES
@@ -84,7 +94,7 @@ def _build_zones(raw: dict[str, Any]) -> list[Zone]:
                 name=name,
                 valve_entity_id=valve,
                 duration_minutes=max(1, duration),
-                zone_id=entry.get(CONF_ZONE_ID),
+                zone_id=zone_conf.get(CONF_ZONE_ID),
             )
         )
     return zones
@@ -172,13 +182,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await safety.emergency_shutdown(zones)
     if master_valve:
         try:
-            svc_domain, svc_action = entity_svc_close(master_valve)
-            await hass.services.async_call(
-                svc_domain,
-                svc_action,
-                {"entity_id": master_valve},
-                blocking=True,
-            )
+            await async_call_close(hass, master_valve)
         except Exception:
             _LOGGER.exception(
                 "Irrigation Proxy: failed to force-close master valve on startup"
@@ -247,6 +251,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # valve immediately afterwards anyway.
         await sequencer.stop(skip_depressurize=True)
         await safety.emergency_shutdown(zones)
+        if master_valve:
+            # sequencer.stop() schließt den Master nur, wenn ein Programm
+            # lief. Ein manuell geöffneter Master (Wartungstest) würde sonst
+            # über den Neustart hinweg offen bleiben.
+            safety.cancel_master_deadman()
+            try:
+                await async_call_close(hass, master_valve)
+            except Exception:
+                _LOGGER.exception(
+                    "Irrigation Proxy: failed to close master valve on HA stop"
+                )
 
     entry.async_on_unload(
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _on_ha_stop)

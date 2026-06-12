@@ -51,24 +51,6 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-def _persist_entry_data(
-    hass: HomeAssistant,
-    coordinator: IrrigationCoordinator,
-    entry: ConfigEntry,
-    updates: dict[str, Any],
-) -> None:
-    """Persist runtime tweaks into the config entry without triggering a reload.
-
-    Update listeners get notified for any data change, which would normally
-    re-instantiate the coordinator and abort a running program. The
-    coordinator already holds the new live values – setting
-    `suppress_next_reload` lets the listener skip the reload exactly once.
-    """
-    coordinator.suppress_next_reload = True
-    new_data = {**entry.data, **updates}
-    hass.config_entries.async_update_entry(entry, data=new_data)
-
-
 class _BaseNumber(CoordinatorEntity[IrrigationCoordinator], NumberEntity):
     """Base class for irrigation number entities – shared device grouping."""
 
@@ -134,14 +116,14 @@ class ZoneDurationNumber(_BaseNumber):
         zone.duration_minutes = new_minutes
         _LOGGER.info("Zone '%s' duration set to %d min", zone.name, new_minutes)
 
-        zones_raw = list(self._entry.data.get(CONF_ZONES) or [])
-        for entry in zones_raw:
-            if entry.get(CONF_ZONE_VALVE) == self._valve_entity_id:
-                entry[CONF_ZONE_DURATION_MINUTES] = new_minutes
+        # Die Zonen-Dicts kopieren statt in-place zu mutieren: HA erkennt
+        # die Änderung an entry.data sonst nicht und speichert sie nie.
+        zones_raw = [dict(z) for z in (self._entry.data.get(CONF_ZONES) or [])]
+        for zone_conf in zones_raw:
+            if zone_conf.get(CONF_ZONE_VALVE) == self._valve_entity_id:
+                zone_conf[CONF_ZONE_DURATION_MINUTES] = new_minutes
                 break
-        _persist_entry_data(
-            self.hass, self.coordinator, self._entry, {CONF_ZONES: zones_raw}
-        )
+        self.coordinator.persist_entry_data({CONF_ZONES: zones_raw})
         self.async_write_ha_state()
 
 
@@ -175,11 +157,8 @@ class InterZoneDelayNumber(_BaseNumber):
         new_seconds = max(0, int(value))
         self.coordinator.sequencer.pause_seconds = new_seconds
         _LOGGER.info("Inter-zone delay set to %ds", new_seconds)
-        _persist_entry_data(
-            self.hass,
-            self.coordinator,
-            self._entry,
-            {CONF_INTER_ZONE_DELAY_SECONDS: new_seconds},
+        self.coordinator.persist_entry_data(
+            {CONF_INTER_ZONE_DELAY_SECONDS: new_seconds}
         )
         self.async_write_ha_state()
 
@@ -214,11 +193,8 @@ class MaxRuntimeNumber(_BaseNumber):
         new_minutes = max(1, int(value))
         self.coordinator.safety.max_runtime_minutes = new_minutes
         _LOGGER.info("Max runtime set to %d min", new_minutes)
-        _persist_entry_data(
-            self.hass,
-            self.coordinator,
-            self._entry,
-            {CONF_MAX_RUNTIME_MINUTES: new_minutes},
+        self.coordinator.persist_entry_data(
+            {CONF_MAX_RUNTIME_MINUTES: new_minutes}
         )
         self.async_write_ha_state()
 
@@ -253,10 +229,7 @@ class DepressurizeSecondsNumber(_BaseNumber):
         new_seconds = max(0, int(value))
         self.coordinator.sequencer.depressurize_seconds = new_seconds
         _LOGGER.info("Depressurize delay set to %ds", new_seconds)
-        _persist_entry_data(
-            self.hass,
-            self.coordinator,
-            self._entry,
-            {CONF_DEPRESSURIZE_SECONDS: new_seconds},
+        self.coordinator.persist_entry_data(
+            {CONF_DEPRESSURIZE_SECONDS: new_seconds}
         )
         self.async_write_ha_state()

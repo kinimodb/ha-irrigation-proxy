@@ -67,6 +67,21 @@ def entity_state_is_on(state: str) -> bool:
     return state in _ENTITY_ON_STATES
 
 
+async def async_call_close(hass: HomeAssistant, entity_id: str) -> None:
+    """Issue a single close/turn-off service call for *entity_id*.
+
+    Fire-and-forget building block – callers that need verification or
+    retries (Zone.force_close, Sequencer close paths) layer that on top.
+    """
+    svc_domain, svc_action = entity_svc_close(entity_id)
+    await hass.services.async_call(
+        svc_domain,
+        svc_action,
+        {"entity_id": entity_id},
+        blocking=True,
+    )
+
+
 class Zone:
     """Represents a single irrigation zone (one valve).
 

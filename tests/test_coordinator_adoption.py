@@ -10,7 +10,6 @@ window.
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,7 +19,7 @@ from custom_components.irrigation_proxy.safety import SafetyManager
 from custom_components.irrigation_proxy.sequencer import Sequencer
 from custom_components.irrigation_proxy.zone import Zone
 
-from .conftest import FakeState, make_mock_hass
+from .conftest import FakeState, make_mock_hass_with_bus
 
 
 def _make_zones(count: int = 1) -> list[Zone]:
@@ -35,13 +34,7 @@ def _make_zones(count: int = 1) -> list[Zone]:
 
 
 def _make_hass(state_map: dict[str, FakeState]) -> MagicMock:
-    hass = make_mock_hass(state_map)
-    hass.async_create_task = MagicMock(
-        side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
-    )
-    hass.bus = MagicMock()
-    hass.bus.async_fire = MagicMock()
-    return hass
+    return make_mock_hass_with_bus(state_map)
 
 
 def _build(hass: MagicMock, zones: list[Zone]) -> IrrigationCoordinator:

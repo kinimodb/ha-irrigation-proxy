@@ -18,6 +18,20 @@ from .const import (
 _STALE_KEYS = {"zone_durations", "rain_threshold_mm", "rain_adjust_mode"}
 
 
+def new_zone_id() -> str:
+    """Return a short stable id for a zone."""
+    return f"z_{secrets.token_hex(4)}"
+
+
+def _as_minutes(raw: Any, default: int) -> int:
+    """Parse a duration value defensively – korrupte Altdaten dürfen die
+    Migration (und damit das Setup) nicht abbrechen."""
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
 def migrate_v1_zones(data: dict[str, Any]) -> dict[str, Any]:
     """Convert v0.4.x zone format (list of entity-ID strings) to v0.5.0 dicts.
 
@@ -32,7 +46,9 @@ def migrate_v1_zones(data: dict[str, Any]) -> dict[str, Any]:
         return data
 
     durations: dict[str, Any] = data.pop("zone_durations", None) or {}
-    default_duration = int(data.pop("duration_minutes", DEFAULT_DURATION_MINUTES))
+    default_duration = _as_minutes(
+        data.pop("duration_minutes", None), DEFAULT_DURATION_MINUTES
+    )
 
     migrated: list[dict[str, Any]] = []
     for item in zones_raw:
@@ -41,10 +57,12 @@ def migrate_v1_zones(data: dict[str, Any]) -> dict[str, Any]:
         duration = durations.get(item, default_duration)
         migrated.append(
             {
-                CONF_ZONE_ID: f"z_{secrets.token_hex(4)}",
+                CONF_ZONE_ID: new_zone_id(),
                 CONF_ZONE_NAME: item,
                 CONF_ZONE_VALVE: item,
-                CONF_ZONE_DURATION_MINUTES: int(duration),
+                CONF_ZONE_DURATION_MINUTES: _as_minutes(
+                    duration, default_duration
+                ),
             }
         )
 

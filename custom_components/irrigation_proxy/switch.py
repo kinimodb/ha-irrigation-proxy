@@ -171,9 +171,7 @@ class ScheduleEnabledSwitch(CoordinatorEntity[IrrigationCoordinator], SwitchEnti
         # Skip the options-update listener's config-entry reload (would
         # tear down a running program). The scheduler picks the new
         # value up via its own reload() call below.
-        self.coordinator.suppress_next_reload = True
-        new_data = {**self._entry.data, CONF_SCHEDULE_ENABLED: enabled}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.coordinator.persist_entry_data({CONF_SCHEDULE_ENABLED: enabled})
         if self.coordinator.scheduler is not None:
             self.coordinator.scheduler.reload()
         await self.coordinator.async_request_refresh()
@@ -235,10 +233,10 @@ class IgnoreWeatherAdjustmentSwitch(
     async def _set_enabled(self, enabled: bool) -> None:
         # Live-tunable – avoid a full config-entry reload which would stop
         # a running program.
-        self.coordinator.suppress_next_reload = True
         self.coordinator.ignore_weather = enabled
-        new_data = {**self._entry.data, CONF_IGNORE_WEATHER_ADJUSTMENT: enabled}
-        self.hass.config_entries.async_update_entry(self._entry, data=new_data)
+        self.coordinator.persist_entry_data(
+            {CONF_IGNORE_WEATHER_ADJUSTMENT: enabled}
+        )
         await self.coordinator.async_request_refresh()
         self.async_write_ha_state()
 
