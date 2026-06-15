@@ -4,6 +4,32 @@ All notable changes to the Irrigation Proxy integration are documented in
 this file. See the Release Process section in `CLAUDE.md` for the rules
 that govern every entry.
 
+## v0.9.6 — 2026-06-15
+
+### Fixed
+- Stop multi-zone programs from aborting after the first zone. A swallowed
+  Zigbee command (or a delivery error raised from the close service) during
+  the zone-to-zone transition could end the program early, leave the first
+  zone valve open, and skip every later zone. Per-valve service errors are
+  now contained so the remaining zones still run.
+
+### Safety
+- Never treat an `unavailable`/`unknown` valve as "closed". Close
+  verification now requires a positive `off`/`closed` reading, so a valve
+  the proxy cannot read is no longer assumed safely shut.
+- Keep a zone's deadman timer armed until the valve is CONFIRMED closed.
+  Previously the deadman was cancelled unconditionally after a single close
+  attempt, so a stuck-open valve lost its safety net. A new
+  `irrigation_proxy_zone_close_failed` event and a persistent notification
+  now fire when a zone valve cannot be confirmed closed.
+- Retry opening the master valve (and escalate a failed zone close to
+  `force_close`) with the same retry budget already used for closing, via
+  the new `DEFAULT_OPEN_RETRY_MAX`. A single missed open no longer silently
+  skips a zone.
+- Load after `zha`/`mqtt` (`after_dependencies`) so the startup valve-close
+  safety sweep runs against valves that actually exist, instead of seeing
+  them as "not found" and assuming they are closed.
+
 ## v0.9.5 — 2026-06-12
 
 ### Changed

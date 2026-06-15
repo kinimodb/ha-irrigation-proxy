@@ -1,11 +1,12 @@
 {
   "domain": "irrigation_proxy",
   "name": "Irrigation Proxy",
+  "after_dependencies": ["zha", "mqtt"],
   "codeowners": ["@kinimodb"],
   "config_flow": true,
   "documentation": "https://github.com/kinimodb/ha-irrigation-proxy",
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/kinimodb/ha-irrigation-proxy/issues",
   "requirements": [],
-  "version": "0.9.5"
+  "version": "0.9.6"
 }

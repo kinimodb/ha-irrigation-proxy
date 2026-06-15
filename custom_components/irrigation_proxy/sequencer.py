@@ -33,18 +33,21 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     DEFAULT_CLOSE_RETRY_MAX,
+    DEFAULT_OPEN_RETRY_MAX,
     DEFAULT_WEATHER_FACTOR,
     DOMAIN,
     EVENT_MASTER_CLOSE_FAILED,
     EVENT_PROGRAM_ABORTED,
     EVENT_PROGRAM_COMPLETED,
     EVENT_PROGRAM_STARTED,
+    EVENT_ZONE_CLOSE_FAILED,
     EVENT_ZONE_COMPLETED,
     EVENT_ZONE_ERROR,
     EVENT_ZONE_STARTED,
 )
 
 from .zone import (
+    entity_state_is_off,
     entity_state_is_on,
     entity_svc_close,
     entity_svc_open,
@@ -699,8 +702,20 @@ class Sequencer:
                         "Sequencer: master valve failed to open – aborting zone '%s'",
                         zone.name,
                     )
-                    await zone.turn_off(self._hass)
-                    self._safety.cancel_deadman(zone.valve_entity_id)
+                    # Defensive: the master may have half-opened, so close it
+                    # before dropping the zone. Close the zone via the full
+                    # verify+retry path; only release its deadman once we have
+                    # positive proof it is shut.
+                    await self.close_master()
+                    if await self._close_zone_verified(zone):
+                        self._safety.cancel_deadman(zone.valve_entity_id)
+                    else:
+                        _LOGGER.error(
+                            "Sequencer: zone '%s' not confirmed closed after "
+                            "master-open failure – keeping deadman armed",
+                            zone.name,
+                        )
+                        self._notify_zone_close_failed(zone)
                     continue
 
                 # 3. Wait the (weather-adjusted) duration. Start the user-
@@ -729,9 +744,21 @@ class Sequencer:
                         self._depressurize_started_at = None
                         self._depressurize_duration_seconds = 0
 
-                # 6. Close zone valve (drained)
-                await zone.turn_off(self._hass)
-                self._safety.cancel_deadman(zone.valve_entity_id)
+                # 6. Close zone valve (drained). Verify + retry, and only
+                # release the deadman once the valve is CONFIRMED closed. A
+                # swallowed Zigbee close command must never strand the valve
+                # open without its safety net – that was the 2026-06-15
+                # failure mode (zone left open, deadman cancelled, program on
+                # to nowhere).
+                if await self._close_zone_verified(zone):
+                    self._safety.cancel_deadman(zone.valve_entity_id)
+                else:
+                    _LOGGER.error(
+                        "Sequencer: zone '%s' could NOT be confirmed closed – "
+                        "keeping deadman armed and notifying user",
+                        zone.name,
+                    )
+                    self._notify_zone_close_failed(zone)
                 self._completed_zones += 1
 
                 _LOGGER.info("Sequencer: zone '%s' completed", zone.name)
@@ -810,10 +837,17 @@ class Sequencer:
             await self.close_master()
             if self._current_zone is not None:
                 try:
-                    await self._current_zone.turn_off(self._hass)
-                    self._safety.cancel_deadman(
-                        self._current_zone.valve_entity_id
-                    )
+                    if await self._close_zone_verified(self._current_zone):
+                        self._safety.cancel_deadman(
+                            self._current_zone.valve_entity_id
+                        )
+                    else:
+                        _LOGGER.error(
+                            "Sequencer: could not confirm zone '%s' closed "
+                            "during error cleanup – keeping deadman armed",
+                            self._current_zone.name,
+                        )
+                        self._notify_zone_close_failed(self._current_zone)
                 except Exception:
                     _LOGGER.exception("Sequencer: cleanup also failed")
 
@@ -822,34 +856,79 @@ class Sequencer:
         if self._on_complete is not None:
             self._on_complete()
 
+    # -- Zone close helper ----------------------------------------------
+
+    async def _close_zone_verified(self, zone: Zone) -> bool:
+        """Close a zone valve and CONFIRM closure. Returns True only on proof.
+
+        Tries the normal verified close first; if that does not confirm
+        (swallowed command, Zigbee latency, valve unavailable), it escalates
+        to ``force_close`` with its own retry loop. The deadman is
+        deliberately NOT touched here – the caller decides whether to release
+        it, because a valve that won't confirm closed must keep its safety
+        net armed until the hard cap force-closes it.
+        """
+        if await zone.turn_off(self._hass):
+            return True
+        _LOGGER.warning(
+            "Sequencer: zone '%s' did not confirm closed on first attempt – "
+            "escalating to force_close",
+            zone.name,
+        )
+        return await zone.force_close(self._hass)
+
     # -- Master valve helpers -------------------------------------------
 
     async def open_master(self) -> bool | None:
-        """Open the master valve, verify state. Returns None if no master."""
+        """Open the master valve (with retries) and verify state.
+
+        Returns None when no master is configured, True once the valve
+        confirms on/open, or False when every retry attempt was exhausted
+        without a positive open reading. Symmetric to ``close_master`` so a
+        single swallowed open command can no longer skip a whole zone.
+        """
         if not self._master_valve:
             return None
 
         _LOGGER.info("Sequencer: opening master valve %s", self._master_valve)
         svc_domain, svc_action = entity_svc_open(self._master_valve)
-        await self._hass.services.async_call(
-            svc_domain,
-            svc_action,
-            {"entity_id": self._master_valve},
-            blocking=True,
-        )
-        await wait_for_entity_state(
-            self._hass, self._master_valve, expected_on=True
-        )
-        state = self._hass.states.get(self._master_valve)
-        actual = state.state if state is not None else "unavailable"
-        if not entity_state_is_on(actual):
-            _LOGGER.warning(
-                "Sequencer: master valve did not open after %s (state=%s)",
-                svc_action,
-                actual,
+        last_state: str = "unknown"
+        for attempt in range(1, DEFAULT_OPEN_RETRY_MAX + 1):
+            try:
+                await self._hass.services.async_call(
+                    svc_domain,
+                    svc_action,
+                    {"entity_id": self._master_valve},
+                    blocking=True,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Sequencer: failed to call %s on master valve (attempt %d)",
+                    svc_action,
+                    attempt,
+                )
+            await wait_for_entity_state(
+                self._hass, self._master_valve, expected_on=True
             )
-            return False
-        return True
+            state = self._hass.states.get(self._master_valve)
+            last_state = state.state if state is not None else "unavailable"
+            if entity_state_is_on(last_state):
+                return True
+            _LOGGER.warning(
+                "Sequencer: master valve still not open after attempt %d "
+                "(state=%s) – retrying",
+                attempt,
+                last_state,
+            )
+
+        _LOGGER.error(
+            "Sequencer: master valve %s did NOT open after %d attempts "
+            "(last_state=%s)",
+            self._master_valve,
+            DEFAULT_OPEN_RETRY_MAX,
+            last_state,
+        )
+        return False
 
     async def close_master(self) -> bool:
         """Close the master valve (best-effort, with retries).
@@ -885,11 +964,15 @@ class Sequencer:
             )
             state = self._hass.states.get(self._master_valve)
             last_state = state.state if state is not None else "unavailable"
-            if not entity_state_is_on(last_state):
+            # Require a POSITIVE off/closed reading – an unreadable master is
+            # never assumed shut (same hardening as the zone close path).
+            if entity_state_is_off(last_state):
                 return True
             _LOGGER.warning(
-                "Sequencer: master valve still open after attempt %d – retrying",
+                "Sequencer: master valve still open after attempt %d "
+                "(state=%s) – retrying",
                 attempt,
+                last_state,
             )
 
         _LOGGER.error(
@@ -950,6 +1033,56 @@ class Sequencer:
         except Exception:
             _LOGGER.exception(
                 "Sequencer: failed to raise master-close persistent notification"
+            )
+
+    def _notify_zone_close_failed(self, zone: Zone) -> None:
+        """Fire a bus event and raise a persistent notification for a zone
+        valve that could not be confirmed closed.
+
+        Mirrors ``_notify_master_close_failed``: the deadman stays armed so
+        the valve is still force-closed at the runtime cap, but the user is
+        told immediately because a stuck-open zone keeps watering.
+        """
+        valve_id = zone.valve_entity_id
+        try:
+            self._hass.bus.async_fire(
+                EVENT_ZONE_CLOSE_FAILED,
+                {
+                    "zone_name": zone.name,
+                    "valve_entity_id": valve_id,
+                    "attempts": DEFAULT_CLOSE_RETRY_MAX,
+                },
+            )
+        except Exception:  # noqa: BLE001 – defensive
+            _LOGGER.exception(
+                "Sequencer: failed to fire zone_close_failed event"
+            )
+
+        try:
+            from homeassistant.components import persistent_notification
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Sequencer: persistent_notification unavailable")
+            return
+
+        title = "Irrigation Proxy: zone valve stuck open"
+        message = (
+            f"Zone valve `{valve_id}` (zone `{zone.name}`) did not confirm "
+            f"closed after {DEFAULT_CLOSE_RETRY_MAX} attempts. Water may still "
+            "be flowing through this zone. The deadman timer will force it "
+            "shut at the runtime cap, but check the Zigbee link / power and "
+            "close the valve manually if needed."
+        )
+        notif_id = f"{DOMAIN}_zone_close_failed_{valve_id}"
+        try:
+            persistent_notification.async_create(
+                self._hass,
+                message,
+                title=title,
+                notification_id=notif_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Sequencer: failed to raise zone-close persistent notification"
             )
 
     def _reset(self) -> None:

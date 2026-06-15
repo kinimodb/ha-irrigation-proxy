@@ -10,6 +10,10 @@ import pytest
 from custom_components.irrigation_proxy.const import (
     DEFAULT_CLOSE_RETRY_MAX,
     EVENT_MASTER_CLOSE_FAILED,
+    EVENT_PROGRAM_ABORTED,
+    EVENT_PROGRAM_COMPLETED,
+    EVENT_ZONE_CLOSE_FAILED,
+    EVENT_ZONE_STARTED,
 )
 from custom_components.irrigation_proxy.safety import SafetyManager
 from custom_components.irrigation_proxy.sequencer import Sequencer, SequencerState
@@ -395,3 +399,210 @@ class TestNoMaster:
             ("turn_on", "switch.valve_2"),
             ("turn_off", "switch.valve_2"),
         ]
+
+
+def _fired(hass: MagicMock, event_type: str) -> list[dict]:
+    """Return all event_data dicts fired for a given event type."""
+    return [
+        call.args[1]
+        for call in hass.bus.async_fire.call_args_list
+        if call.args[0] == event_type
+    ]
+
+
+def _make_bus_hass(state_map: dict[str, FakeState]) -> MagicMock:
+    """Tracking hass with a real-ish task scheduler and a recording bus."""
+    hass = make_mock_hass(state_map)
+    hass.async_create_task = MagicMock(
+        side_effect=lambda coro, *a, **kw: asyncio.ensure_future(coro)
+    )
+    hass.bus = MagicMock()
+    hass.bus.async_fire = MagicMock()
+    return hass
+
+
+class TestZoneCloseRobustness:
+    """v0.9.6: regression cover for the 2026-06-15 multi-zone abort.
+
+    Failure mode reproduced: zone 1 left open, its deadman cancelled, and
+    zone 2 never ran. The fix must keep the deadman armed, notify the user,
+    and still run later zones.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_close_keeps_deadman_and_runs_next_zone(self) -> None:
+        zones = _zones(2)
+        state_map = {z.valve_entity_id: FakeState("off") for z in zones}
+        state_map[MASTER] = FakeState("off")
+        hass = _make_bus_hass(state_map)
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service in ("turn_on", "open_valve"):
+                state_map[eid] = FakeState("on")
+            elif service in ("turn_off", "close_valve"):
+                # Zone 1's valve refuses every close (stuck on); the rest
+                # close normally.
+                if eid == "switch.valve_1":
+                    return
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass, zones=zones, safety=safety,
+            pause_seconds=0, master_valve_entity_id=MASTER,
+            depressurize_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # Zone 1 never confirmed closed -> deadman stays armed for it.
+        assert "switch.valve_1" in safety._zone_start_times
+        # Zone 2 closed fine -> its deadman was released.
+        assert "switch.valve_2" not in safety._zone_start_times
+
+        close_failed = _fired(hass, EVENT_ZONE_CLOSE_FAILED)
+        assert len(close_failed) == 1
+        assert close_failed[0]["valve_entity_id"] == "switch.valve_1"
+
+        # The whole point: zone 2 STILL ran.
+        started = [e["zone_name"] for e in _fired(hass, EVENT_ZONE_STARTED)]
+        assert started == ["Zone 1", "Zone 2"]
+        completed = _fired(hass, EVENT_PROGRAM_COMPLETED)
+        assert len(completed) == 1
+
+    @pytest.mark.asyncio
+    async def test_transient_close_recovered_by_force_close(self) -> None:
+        zones = _zones(1)
+        state_map = {z.valve_entity_id: FakeState("off") for z in zones}
+        state_map[MASTER] = FakeState("off")
+        hass = _make_bus_hass(state_map)
+        close_attempts = {"switch.valve_1": 0}
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service in ("turn_on", "open_valve"):
+                state_map[eid] = FakeState("on")
+            elif service in ("turn_off", "close_valve"):
+                if eid == "switch.valve_1":
+                    close_attempts[eid] += 1
+                    # First close (normal turn_off) swallowed; the next
+                    # close (force_close attempt 1) succeeds.
+                    if close_attempts[eid] >= 2:
+                        state_map[eid] = FakeState("off")
+                    return
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass, zones=zones, safety=safety,
+            pause_seconds=0, master_valve_entity_id=MASTER,
+            depressurize_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # force_close recovered it -> no failure signal, deadman released.
+        assert _fired(hass, EVENT_ZONE_CLOSE_FAILED) == []
+        assert "switch.valve_1" not in safety._zone_start_times
+        # turn_off (1) + one force_close attempt (1) = 2 close calls.
+        assert close_attempts["switch.valve_1"] == 2
+
+    @pytest.mark.asyncio
+    async def test_delivery_exception_on_close_does_not_kill_program(self) -> None:
+        """A Zigbee delivery error raised from the close service must not
+        abort the whole program – later zones still run."""
+        zones = _zones(2)
+        state_map = {z.valve_entity_id: FakeState("off") for z in zones}
+        state_map[MASTER] = FakeState("off")
+        hass = _make_bus_hass(state_map)
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service in ("turn_on", "open_valve"):
+                state_map[eid] = FakeState("on")
+            elif service in ("turn_off", "close_valve"):
+                if eid == "switch.valve_1":
+                    raise RuntimeError("Zigbee delivery failed: no route")
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass, zones=zones, safety=safety,
+            pause_seconds=0, master_valve_entity_id=MASTER,
+            depressurize_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        # The global error handler must NOT have fired (no program abort).
+        assert _fired(hass, EVENT_PROGRAM_ABORTED) == []
+        # Zone 1 kept its deadman and raised the stuck-open signal.
+        assert "switch.valve_1" in safety._zone_start_times
+        assert len(_fired(hass, EVENT_ZONE_CLOSE_FAILED)) == 1
+        # Zone 2 still started and the program completed.
+        started = [e["zone_name"] for e in _fired(hass, EVENT_ZONE_STARTED)]
+        assert started == ["Zone 1", "Zone 2"]
+        assert len(_fired(hass, EVENT_PROGRAM_COMPLETED)) == 1
+
+
+class TestMasterOpenRetry:
+    """v0.9.6: open_master must retry a swallowed open like close_master does."""
+
+    @pytest.mark.asyncio
+    async def test_master_open_recovers_on_second_attempt(self) -> None:
+        zones = _zones(1)
+        state_map = {z.valve_entity_id: FakeState("off") for z in zones}
+        state_map[MASTER] = FakeState("off")
+        hass = _make_bus_hass(state_map)
+        master_opens = {"n": 0}
+
+        async def _track_call(domain, service, data, **kwargs):
+            eid = data["entity_id"]
+            if service in ("turn_on", "open_valve"):
+                if eid == MASTER:
+                    master_opens["n"] += 1
+                    if master_opens["n"] >= 2:  # first open swallowed
+                        state_map[eid] = FakeState("on")
+                    return
+                state_map[eid] = FakeState("on")
+            elif service in ("turn_off", "close_valve"):
+                state_map[eid] = FakeState("off")
+
+        hass.services.async_call = AsyncMock(side_effect=_track_call)
+        hass.states.get = MagicMock(side_effect=lambda eid: state_map.get(eid))
+
+        safety = SafetyManager(hass, max_runtime_minutes=60)
+        seq = Sequencer(
+            hass=hass, zones=zones, safety=safety,
+            pause_seconds=0, master_valve_entity_id=MASTER,
+            depressurize_seconds=0,
+        )
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            await seq.start()
+            if seq._task:
+                await seq._task
+
+        assert master_opens["n"] == 2  # opened on the retry
+        completed = _fired(hass, EVENT_PROGRAM_COMPLETED)
+        assert len(completed) == 1
+        assert completed[0]["zones_completed"] == 1

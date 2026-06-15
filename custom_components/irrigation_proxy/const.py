@@ -92,6 +92,10 @@ DEFAULT_UPDATE_INTERVAL_SECONDS: Final = 30
 DEFAULT_STATE_VERIFY_TIMEOUT_SECONDS: Final = 5
 STATE_VERIFY_POLL_INTERVAL_SECONDS: Final = 0.2
 DEFAULT_CLOSE_RETRY_MAX: Final = 3
+# Symmetric to DEFAULT_CLOSE_RETRY_MAX: opening a valve (zone or master) is
+# retried up to this many times before the zone is treated as failed. A single
+# swallowed Zigbee command must not silently skip a zone or strand the program.
+DEFAULT_OPEN_RETRY_MAX: Final = 3
 DEFAULT_SAFETY_MARGIN_SECONDS: Final = 30
 
 # Live-UI tick interval while the sequencer is running (seconds).
@@ -107,6 +111,7 @@ EVENT_ZONE_COMPLETED: Final = f"{DOMAIN}_zone_completed"
 EVENT_ZONE_ERROR: Final = f"{DOMAIN}_zone_error"
 EVENT_LEAK_DETECTED: Final = f"{DOMAIN}_leak_detected"
 EVENT_MASTER_CLOSE_FAILED: Final = f"{DOMAIN}_master_close_failed"
+EVENT_ZONE_CLOSE_FAILED: Final = f"{DOMAIN}_zone_close_failed"
 
 # -- Service names ---------------------------------------------------------
 

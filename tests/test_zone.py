@@ -119,14 +119,23 @@ class TestVerifyState:
         assert zone.state_mismatch is True
 
     @pytest.mark.asyncio
-    async def test_unavailable_entity(self, zone: Zone) -> None:
-        hass = make_mock_hass({})  # Entity not found
+    async def test_unavailable_entity_is_not_confirmed_closed(
+        self, zone: Zone
+    ) -> None:
+        """v0.9.6 safety fix: an unreadable valve must NOT count as closed.
+
+        Treating 'unavailable' as 'off' is exactly how a swallowed Zigbee
+        command stranded a zone valve open while the program cancelled its
+        deadman and moved on. A close is only verified on a positive
+        off/closed reading.
+        """
+        hass = make_mock_hass({})  # Entity not found -> "unavailable"
         zone.expected_state = False
 
         result = await zone.verify_state(hass)
 
-        # "unavailable" != STATE_ON, so expected_state=False matches
-        assert result is True
+        assert result is False
+        assert zone.state_mismatch is True
 
 
 class TestForceClose:

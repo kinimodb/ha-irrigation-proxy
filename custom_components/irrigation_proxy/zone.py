@@ -18,6 +18,12 @@ _LOGGER = logging.getLogger(__name__)
 
 # States that mean a valve/switch is open/on.
 _ENTITY_ON_STATES: frozenset[str] = frozenset({"on", "open"})
+# States that mean a valve/switch is CONFIRMED closed/off. Crucially,
+# "unavailable"/"unknown" are in NEITHER set: a valve we cannot read is never
+# assumed to be safely closed. That false assumption (treating unavailable as
+# "off") is exactly how a swallowed Zigbee command stranded a zone valve open
+# while the program moved on and cancelled its deadman.
+_ENTITY_OFF_STATES: frozenset[str] = frozenset({"off", "closed"})
 
 
 async def wait_for_entity_state(
@@ -35,7 +41,14 @@ async def wait_for_entity_state(
     for i in range(max_iterations + 1):
         state = hass.states.get(entity_id)
         actual = state.state if state is not None else "unavailable"
-        if entity_state_is_on(actual) == expected_on:
+        # When waiting for a close we demand a POSITIVE off/closed reading –
+        # "unavailable" must not short-circuit the wait as if it were closed.
+        matched = (
+            entity_state_is_on(actual)
+            if expected_on
+            else entity_state_is_off(actual)
+        )
+        if matched:
             return True
         if i < max_iterations:
             await asyncio.sleep(poll_interval)
@@ -65,6 +78,16 @@ def entity_svc_close(entity_id: str) -> tuple[str, str]:
 def entity_state_is_on(state: str) -> bool:
     """Return True if *state* means the entity is open/on (switch or valve)."""
     return state in _ENTITY_ON_STATES
+
+
+def entity_state_is_off(state: str) -> bool:
+    """Return True only if *state* POSITIVELY confirms closed/off.
+
+    Unlike ``not entity_state_is_on(...)`` this returns False for
+    ``unavailable``/``unknown``: an unreadable valve is never treated as
+    safely closed, so close-verification can require proof of closure.
+    """
+    return state in _ENTITY_OFF_STATES
 
 
 async def async_call_close(hass: HomeAssistant, entity_id: str) -> None:
@@ -120,12 +143,23 @@ class Zone:
         self.expected_state = True
 
         svc_domain, svc_action = entity_svc_open(self.valve_entity_id)
-        await hass.services.async_call(
-            svc_domain,
-            svc_action,
-            {"entity_id": self.valve_entity_id},
-            blocking=True,
-        )
+        try:
+            await hass.services.async_call(
+                svc_domain,
+                svc_action,
+                {"entity_id": self.valve_entity_id},
+                blocking=True,
+            )
+        except Exception:
+            # A failed delivery (e.g. Zigbee NWK/delivery error) must not
+            # propagate and abort the whole program – verify_state below
+            # decides success and the sequencer handles the retry.
+            _LOGGER.exception(
+                "Zone '%s': %s.%s service call raised",
+                self.name,
+                svc_domain,
+                svc_action,
+            )
 
         await wait_for_entity_state(hass, self.valve_entity_id, expected_on=True)
         verified = await self.verify_state(hass)
@@ -151,12 +185,23 @@ class Zone:
         self.expected_state = False
 
         svc_domain, svc_action = entity_svc_close(self.valve_entity_id)
-        await hass.services.async_call(
-            svc_domain,
-            svc_action,
-            {"entity_id": self.valve_entity_id},
-            blocking=True,
-        )
+        try:
+            await hass.services.async_call(
+                svc_domain,
+                svc_action,
+                {"entity_id": self.valve_entity_id},
+                blocking=True,
+            )
+        except Exception:
+            # See turn_on: a swallowed close command is handled by the
+            # verify below + the caller's force_close retry, never by
+            # crashing the sequencer loop.
+            _LOGGER.exception(
+                "Zone '%s': %s.%s service call raised",
+                self.name,
+                svc_domain,
+                svc_action,
+            )
 
         await wait_for_entity_state(hass, self.valve_entity_id, expected_on=False)
         verified = await self.verify_state(hass)
@@ -174,10 +219,19 @@ class Zone:
         return verified
 
     async def verify_state(self, hass: HomeAssistant) -> bool:
-        """Check if the actual valve state matches the expected state."""
+        """Check if the actual valve state matches the expected state.
+
+        A close (``expected_state`` False) is only verified when the valve
+        POSITIVELY reports off/closed. ``unavailable``/``unknown`` count as a
+        mismatch, never as "safely closed" – that is the whole point of the
+        verification and the difference from the pre-0.9.6 behaviour.
+        """
         actual = self._get_actual_state(hass)
-        actual_on = entity_state_is_on(actual)
-        self.state_mismatch = actual_on != self.expected_state
+        if self.expected_state:
+            matches = entity_state_is_on(actual)
+        else:
+            matches = entity_state_is_off(actual)
+        self.state_mismatch = not matches
 
         if self.state_mismatch:
             _LOGGER.warning(
@@ -200,17 +254,27 @@ class Zone:
             )
 
             svc_domain, svc_action = entity_svc_close(self.valve_entity_id)
-            await hass.services.async_call(
-                svc_domain,
-                svc_action,
-                {"entity_id": self.valve_entity_id},
-                blocking=True,
-            )
+            try:
+                await hass.services.async_call(
+                    svc_domain,
+                    svc_action,
+                    {"entity_id": self.valve_entity_id},
+                    blocking=True,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Zone '%s': force_close %s.%s service call raised "
+                    "(attempt %d)",
+                    self.name,
+                    svc_domain,
+                    svc_action,
+                    attempt,
+                )
 
             await wait_for_entity_state(hass, self.valve_entity_id, expected_on=False)
 
             actual = self._get_actual_state(hass)
-            if not entity_state_is_on(actual):
+            if entity_state_is_off(actual):
                 self.expected_state = False
                 self.is_on = False
                 self.state_mismatch = False
